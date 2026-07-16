@@ -31,12 +31,11 @@ st.markdown(
         --bg: #F8FAFC; --surface: #FFFFFF; --border: #E2E8F0;
         --text: #0F172A; --text-secondary: #475569;
         --accent: #2563EB; --accent-hover: #1D4ED8;
-        --slate: #0F172A; --charcoal: #1E293B;
         --success: #15803D; --success-bg: #F0FDF4;
         --warning: #B45309; --warning-bg: #FFFBEB;
         --danger: #B91C1C; --danger-bg: #FEF2F2;
         --guide-bg: #EFF6FF;
-        --sidebar-bg: #0F172A;
+        --sidebar-bg: #FFFFFF;
     }
 
     /* Hide standard Streamlit chrome: hamburger menu, footer, header bar */
@@ -58,15 +57,15 @@ st.markdown(
     [data-testid="stMetricValue"], [data-testid="stMetricLabel"] { color: var(--text) !important; }
     code, pre { color: var(--text) !important; background: #F1F5F9 !important; }
 
-    /* Sidebar — dark slate blueprint */
-    [data-testid="stSidebar"] { background-color: var(--sidebar-bg) !important; border-right: 1px solid #1E293B; }
-    [data-testid="stSidebar"] * { color: #E2E8F0 !important; }
-    [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * { color: #94A3B8 !important; }
-    [data-testid="stSidebar"] .stButton > button { background-color: #1E293B !important; border: 1px solid #334155 !important; color: #E2E8F0 !important; }
-    [data-testid="stSidebar"] .stButton > button:hover { border-color: var(--accent) !important; color: #FFFFFF !important; }
-    [data-testid="stSidebar"] .stTextInput input { background-color: #1E293B !important; color: #E2E8F0 !important; border: 1px solid #334155 !important; }
+    /* Sidebar — light theme, matching the rest of the app */
+    [data-testid="stSidebar"] { background-color: var(--sidebar-bg) !important; border-right: 1px solid var(--border); }
+    [data-testid="stSidebar"] * { color: var(--text) !important; }
+    [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * { color: var(--text-secondary) !important; }
+    [data-testid="stSidebar"] .stButton > button { background-color: #FFFFFF !important; border: 1px solid var(--border) !important; color: var(--text) !important; }
+    [data-testid="stSidebar"] .stButton > button:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
+    [data-testid="stSidebar"] .stTextInput input { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; }
     [data-testid="stSidebar"] .stProgress > div > div { background-color: var(--accent) !important; }
-    [data-testid="stSidebar"] .stProgress { background-color: #1E293B !important; border-radius: 4px; }
+    [data-testid="stSidebar"] .stProgress { background-color: var(--border) !important; border-radius: 4px; }
 
     .stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid var(--border); }
     .stTabs [data-baseweb="tab"] { color: var(--text-secondary) !important; font-weight: 600; }
@@ -80,32 +79,48 @@ st.markdown(
     .stTextInput label, .stTextArea label { color: var(--text) !important; font-weight: 600 !important; }
     .stSelectbox label { color: var(--text) !important; font-weight: 600 !important; }
 
-    /* Buttons */
+    /* Selectbox — the closed control */
+    [data-baseweb="select"] > div { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; }
+    [data-baseweb="select"] * { color: var(--text) !important; }
+    [data-baseweb="select"] svg { fill: var(--text-secondary) !important; }
+
+    /* Selectbox dropdown popover — this renders in a portal attached to
+       <body>, OUTSIDE the app's main container, so none of the rules above
+       reach it. Without explicit styling here it falls back to a dark
+       default, which is the "unreadable dark dropdown" bug. */
+    [data-baseweb="popover"] { background-color: #FFFFFF !important; }
+    [data-baseweb="popover"] * { color: var(--text) !important; }
+    [data-baseweb="menu"] { background-color: #FFFFFF !important; }
+    ul[role="listbox"] { background-color: #FFFFFF !important; }
+    li[role="option"] { background-color: #FFFFFF !important; color: var(--text) !important; }
+    li[role="option"]:hover { background-color: var(--guide-bg) !important; color: var(--accent) !important; }
+    li[aria-selected="true"] { background-color: var(--guide-bg) !important; color: var(--accent) !important; }
+
+    /* Buttons — solid colors, no gradients */
     .stButton > button, .stButton > button * { color: var(--text) !important; }
     .stButton > button { background-color: #FFFFFF !important; border: 1px solid var(--border) !important; border-radius: 8px !important; font-weight: 500; transition: all 0.15s ease; }
     .stButton > button:hover, .stButton > button:hover * { color: var(--accent) !important; }
     .stButton > button:hover { border-color: var(--accent) !important; }
     .stButton > button[kind="primary"], .stButton > button[kind="primary"] * { color: #FFFFFF !important; }
     .stButton > button[kind="primary"] {
-        background: linear-gradient(180deg, #2563EB, #1D4ED8) !important;
-        border-color: #1D4ED8 !important;
+        background-color: var(--accent) !important;
+        border-color: var(--accent) !important;
         font-weight: 700 !important;
-        text-shadow: 0 1px 1px rgba(0,0,0,0.15);
-        box-shadow: 0 2px 8px rgba(37,99,235,0.35);
+        box-shadow: 0 2px 6px rgba(37,99,235,0.25);
     }
     .stButton > button[kind="primary"]:hover, .stButton > button[kind="primary"]:hover * { color: #FFFFFF !important; }
     .stButton > button[kind="primary"]:hover {
-        background: linear-gradient(180deg, #3B72F0, #2563EB) !important;
-        box-shadow: 0 4px 14px rgba(37,99,235,0.5);
+        background-color: var(--accent-hover) !important;
+        box-shadow: 0 4px 10px rgba(37,99,235,0.35);
         transform: translateY(-1px);
     }
 
     .stRadio label, .stCheckbox label { color: var(--text) !important; }
     .stProgress > div > div { background-color: var(--accent) !important; }
 
-    /* ---- Write90 brand elements ---- */
+    /* ---- Write90 brand elements — solid color, no gradients ---- */
     .w90-banner {
-        background: linear-gradient(120deg, #0F172A, #1E293B);
+        background-color: var(--accent);
         border-radius: 12px;
         padding: 22px 28px;
         margin-bottom: 22px;
@@ -116,22 +131,21 @@ st.markdown(
         gap: 12px;
     }
     .w90-banner .w90-title { font-family: 'Inter', sans-serif; font-size: 26px; font-weight: 700; color: #FFFFFF !important; margin: 0; }
-    .w90-banner .w90-tag { font-size: 13.5px; color: #94A3B8 !important; margin-top: 4px; }
+    .w90-banner .w90-tag { font-size: 13.5px; color: #DBEAFE !important; margin-top: 4px; }
     .w90-banner .w90-badge {
-        background: linear-gradient(180deg, #2563EB, #1D4ED8);
-        color: #FFFFFF !important;
+        background-color: #FFFFFF;
+        color: var(--accent) !important;
         font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em;
         padding: 8px 16px; border-radius: 20px;
-        box-shadow: 0 2px 8px rgba(37,99,235,0.4);
         white-space: nowrap;
     }
 
     .w90-profile-card {
-        background: #1E293B; border: 1px solid #334155; border-radius: 10px;
+        background: var(--guide-bg); border: 1px solid #BFDBFE; border-radius: 10px;
         padding: 14px 16px; margin-bottom: 4px;
     }
-    .w90-profile-card .w90-name { font-size: 14.5px; font-weight: 700; color: #FFFFFF !important; }
-    .w90-profile-card .w90-role { font-size: 11.5px; color: #94A3B8 !important; letter-spacing: 0.04em; text-transform: uppercase; }
+    .w90-profile-card .w90-name { font-size: 14.5px; font-weight: 700; color: var(--text) !important; }
+    .w90-profile-card .w90-role { font-size: 11.5px; color: var(--accent) !important; letter-spacing: 0.04em; text-transform: uppercase; }
 
     .w90-metric-stack {
         font-family: 'Inter', monospace; font-size: 12.5px; font-weight: 600;
@@ -163,8 +177,8 @@ st.markdown(
 
     .pte-corrected-box { background: #FAFAFA; border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; font-size: 14px; line-height: 1.7; color: var(--text) !important; }
     .pte-tip { background: #F8FAFC; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 4px; padding: 8px 12px; margin-bottom: 6px; font-size: 13.5px; color: var(--text) !important; }
-    .pte-streak { background: #1E293B; border: 1px solid #334155; border-radius: 8px; padding: 10px 14px; text-align: center; }
-    .pte-streak .n { font-size: 22px; font-weight: 700; color: #FFFFFF !important; }
+    .pte-streak { background: var(--guide-bg); border: 1px solid #BFDBFE; border-radius: 8px; padding: 10px 14px; text-align: center; }
+    .pte-streak .n { font-size: 22px; font-weight: 700; color: var(--accent) !important; }
 
     .pte-score-box { text-align: center; padding: 18px 0 6px; }
     .pte-score-box .num { font-size: 48px; font-weight: 700; color: var(--text) !important; line-height: 1; }
