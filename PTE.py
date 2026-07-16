@@ -85,12 +85,12 @@ Convert the raw total (max 15) to a scaled score out of 90 the way PTE reports i
 Additionally provide:
 1. "content_summary": a neutral 2-sentence paraphrase, in your own words, of what the essay actually argues (not a judgment, just what it says).
 2. "examiner_summary": 2-3 direct, specific sentences on overall performance and the single biggest lever to raise the score.
-3. "sentence_analysis": an array covering EVERY sentence of the submitted essay, in original order. Each item: {"original": the exact original sentence, "has_error": true/false, "corrected": corrected version of that sentence (identical to original if has_error is false), "explanation": short reason if has_error is true, empty string if false}.
+3. "sentence_errors": the person's essay will be given to you as a NUMBERED list of sentences. Return an entry ONLY for sentences that contain an actual error — skip correct sentences entirely, do not list them. Each entry: {"index": the integer number of that sentence from the numbered list, "corrected": corrected version of that sentence, "explanation": short reason}. Keep this list to genuine errors only.
 4. "corrected_essay": a full rewritten version of the entire essay at a 90-level standard, keeping the person's original ideas and structure but fixing all errors and elevating vocabulary/grammar naturally.
 5. "tips": an array of 4-6 short, specific, actionable improvement tips based on THIS essay's actual recurring weaknesses (not generic advice).
 
 Respond with ONLY raw JSON, no markdown fences, no preamble, in this exact shape:
-{"overall": number, "criteria": {"content": number, "form": number, "development": number, "grammar": number, "linguistic_range": number, "vocabulary": number, "spelling": number}, "content_summary": "...", "examiner_summary": "...", "sentence_analysis": [{"original": "...", "has_error": true, "corrected": "...", "explanation": "..."}], "corrected_essay": "...", "tips": ["...", "..."]}"""
+{"overall": number, "criteria": {"content": number, "form": number, "development": number, "grammar": number, "linguistic_range": number, "vocabulary": number, "spelling": number}, "content_summary": "...", "examiner_summary": "...", "sentence_errors": [{"index": 0, "corrected": "...", "explanation": "..."}], "corrected_essay": "...", "tips": ["...", "..."]}"""
 
 
 # ---------------------------------------------------------------------------
@@ -190,22 +190,86 @@ def bump_usage_count(conn, username: str):
 # ---------------------------------------------------------------------------
 # Grading
 # ---------------------------------------------------------------------------
+class GradingError(Exception):
+    def __init__(self, message, raw_text=""):
+        super().__init__(message)
+        self.raw_text = raw_text
+
+
+def try_repair_json(text: str) -> dict:
+    """If the JSON was truncated mid-string/object (hit max_tokens), try a
+    best-effort repair by closing off the last complete field."""
+    # Cut back to the last place a value cleanly ended, then close braces.
+    for cutoff in ["\"}]}", "\"}", "\"]", "\""]:
+        idx = text.rfind(cutoff)
+        if idx != -1:
+            candidate = text[: idx + len(cutoff)]
+            depth_curly = candidate.count("{") - candidate.count("}")
+            depth_square = candidate.count("[") - candidate.count("]")
+            candidate += "]" * max(0, depth_square) + "}" * max(0, depth_curly)
+            try:
+                return json.loads(candidate)
+            except Exception:
+                continue
+    raise GradingError("Could not repair truncated response.", raw_text=text)
+
+
 def word_count(text: str) -> int:
     return len(text.split())
 
 
-def call_claude(api_key: str, prompt: str, essay: str, words: int) -> dict:
+def split_sentences(text: str) -> list:
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    return [s.strip() for s in sentences if s.strip()]
+
+
+def call_claude(api_key: str, prompt: str, essay: str, words: int, model: str) -> dict:
     client = anthropic.Anthropic(api_key=api_key)
-    user_msg = (f"Essay prompt: {prompt}\n\n" if prompt.strip() else "") + f"Essay ({words} words):\n{essay}"
+    sentences = split_sentences(essay)
+    numbered = "\n".join(f"{i}: {s}" for i, s in enumerate(sentences))
+    user_msg = (
+        (f"Essay prompt: {prompt}\n\n" if prompt.strip() else "")
+        + f"Essay ({words} words), given below as a numbered list of sentences:\n{numbered}"
+    )
     response = client.messages.create(
-        model="claude-sonnet-5",
+        model=model,
         max_tokens=3000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )
     text = "".join(block.text for block in response.content if block.type == "text")
     text = re.sub(r"```json|```", "", text).strip()
-    return json.loads(text)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            parsed = try_repair_json(text)
+        except GradingError:
+            raise
+        except Exception:
+            raise GradingError("The examiner's response was malformed.", raw_text=text)
+
+    errors_by_index = {}
+    for e in parsed.get("sentence_errors", []):
+        try:
+            errors_by_index[int(e.get("index"))] = e
+        except (TypeError, ValueError):
+            continue
+
+    sentence_analysis = []
+    for i, s in enumerate(sentences):
+        e = errors_by_index.get(i)
+        if e:
+            sentence_analysis.append({
+                "original": s,
+                "has_error": True,
+                "corrected": e.get("corrected", s),
+                "explanation": e.get("explanation", ""),
+            })
+        else:
+            sentence_analysis.append({"original": s, "has_error": False, "corrected": s, "explanation": ""})
+    parsed["sentence_analysis"] = sentence_analysis
+    return parsed
 
 
 def esc(s: str) -> str:
@@ -321,6 +385,14 @@ with st.sidebar:
     st.caption(f"Essays graded today: **{usage_today} / {DAILY_LIMIT}**")
     st.progress(min(1.0, usage_today / DAILY_LIMIT if DAILY_LIMIT else 0))
 
+    st.markdown("---")
+    speed_choice = st.radio(
+        "Grading speed",
+        ["Fast", "Thorough"],
+        help="Fast uses a quicker model — good for a quick check. Thorough takes longer but reasons more carefully, worth it before a real test.",
+    )
+    MODEL = "claude-haiku-4-5-20251001" if speed_choice == "Fast" else "claude-sonnet-5"
+
 # ---------------------------------------------------------------------------
 # Main layout
 # ---------------------------------------------------------------------------
@@ -353,10 +425,14 @@ with tab_new:
             else:
                 with st.spinner("Marking your script…"):
                     try:
-                        result = call_claude(api_key, prompt, essay, wc)
+                        result = call_claude(api_key, prompt, essay, wc, MODEL)
                         bump_usage_count(conn, st.session_state["user"])
                         save_submission(conn, st.session_state["user"], prompt, essay, result)
                         render_result(result)
+                    except GradingError as e:
+                        st.error("The examiner's response didn't come back in a readable format. Please try again — this usually resolves on a retry.")
+                        with st.expander("Technical details"):
+                            st.code(e.raw_text[-2000:] if e.raw_text else str(e))
                     except Exception as e:
                         st.error(f"Something went wrong marking your essay: {e}")
         else:
