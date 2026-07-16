@@ -280,26 +280,54 @@ TASK_CONFIGS = {
         "word_range": (200, 300),
         "word_hint": "Aim for 200–300 words.",
         "criteria": [
-            ("content", "Content", 3),
+            ("content", "Content", 6),
             ("form", "Form", 2),
-            ("development", "Development, Structure & Coherence", 2),
+            ("development", "Development, Structure & Coherence", 6),
             ("grammar", "Grammar", 2),
-            ("linguistic_range", "General Linguistic Range", 2),
+            ("linguistic_range", "General Linguistic Range", 6),
             ("vocabulary", "Vocabulary Range", 2),
             ("spelling", "Spelling", 2),
         ],
-        "rubric": """You are an experienced PTE Academic examiner. Score using the OFFICIAL Pearson PTE Academic Writing "Essay" rubric.
+        "rubric": """You are an experienced PTE Academic examiner. Score this Essay response using the same trait structure and point scale as Pearson's official PTE Academic Score Guide (raw total = 26).
 
-OFFICIAL TRAITS AND MAX POINTS (raw total = 15):
-- Content (0-3): addresses all aspects of the prompt with relevant, specific, well-explained ideas/examples. If off-topic, not in English, all capitals, no punctuation, or bullet points only, Content = 0 and EVERY other trait must also be 0 (cascade rule).
-- Form (0-2): 2 if 200-300 words. 1 if 120-199 or 301-380 words. 0 if under 120 or over 380 words. If Form = 0, every trait except Content must also be 0 (cascade rule).
-- Development, Structure & Coherence (0-2): logical organization, clear paragraphing, connective devices.
-- Grammar (0-2): grammatical accuracy and control across simple and complex structures.
-- General Linguistic Range (0-2): precision and variety of expression, complex structures where appropriate.
-- Vocabulary Range (0-2): breadth, precision, appropriateness of word choice.
-- Spelling (0-2): consistent, correct spelling (one English variant, not mixed).
+CASCADE RULE: if Content = 0 or Form = 0, every trait for this response scores 0.
 
-Convert raw total (max 15) to a scaled score out of 90: strong 12-13/15 is mid-high 70s to low 80s, near-perfect 14-15/15 is high 80s-90, weak 6-8/15 is 40s-50s, cascaded zero is 10-30.""",
+Content (0-6): how fully and precisely the essay addresses every part of the prompt.
+6 = fully addresses the prompt in depth with a nuanced, well-supported argument throughout.
+5 = adequately addresses the prompt with a persuasive argument and relevant supporting detail, minor exceptions only.
+4 = addresses the main point with a generally convincing argument, but supporting detail is inconsistent.
+3 = relevant to the prompt but doesn't develop the main points adequately; detail often missing.
+2 = superficial attempt with mostly generic statements or heavy reliance on prompt language; few relevant details.
+1 = incomplete understanding of the prompt; generic/repetitive phrasing; supporting detail (if any) disjointed.
+0 = does not properly address the prompt.
+
+Form (0-2): 2 = 200-300 words. 1 = 120-199 or 301-380 words. 0 = under 120 or over 380 words, all-caps, no punctuation, or bullet points/very short sentences only.
+
+Development, Structure & Coherence (0-6): organization and flow of the argument.
+6 = effective logical structure throughout, flows smoothly; clear intro/conclusion; paragraphs logically sequenced; varied connectives used consistently.
+5 = conventional appropriate structure, follows logically if not always smoothly; intro/conclusion/paragraphs present; connectives link ideas with occasional gaps.
+4 = structure mostly present but some elements missing or hard to follow; simple paragraphing not always effective.
+3 = only traces of structure; mostly simple or disconnected points; a position is present but underdeveloped; minimal paragraphing; only simple linear connectives.
+2 = little recognizable structure; ideas disorganized and hard to follow; only very basic connectives (and/but/because).
+1 = disconnected ideas with no hierarchy or coherence; no clear position; only the most basic linear connectives (and/then).
+0 = no recognizable structure.
+
+Grammar (0-2): 2 = consistent control of complex language, errors rare and hard to spot. 1 = relatively high control, no mistakes that would cause misunderstanding. 0 = mainly simple structures and/or several basic mistakes.
+
+General Linguistic Range (0-6): precision and variety of expression.
+6 = wide variety of expression used with ease and precision throughout; no restriction; any errors rare/minor, meaning always clear.
+5 = variety of expression used appropriately throughout; ideas clear; occasional errors don't obscure meaning.
+4 = sufficient range for basic ideas; limitations appear with complex/abstract ideas causing repetition or circumlocution; errors cause occasional lapses but main idea still followable.
+3 = narrow range, repeated simple expressions; communication restricted to simple ideas; errors cause some disruption.
+2 = limited vocabulary/simple expressions dominate; communication compromised, some ideas unclear; frequent basic errors.
+1 = highly restricted expression; significant limitations, ideas generally unclear; pervasive errors impeding meaning.
+0 = meaning not accessible.
+
+Vocabulary Range (0-2): 2 = broad lexical repertoire including idiomatic/colloquial expressions used well. 1 = good range for general academic topics; some lexical shortcomings cause circumlocution or imprecision. 0 = mainly basic vocabulary, insufficient for the topic at this level.
+
+Spelling (0-2): 2 = correct spelling throughout. 1 = one spelling error. 0 = more than one spelling error.
+
+Convert the raw total (max 26) to a scaled practice score out of 90, proportionally: roughly 22-26/26 is high 80s-90, 17-21/26 is 70s-80s, 10-16/26 is 50s-60s, cascaded zero is 10-20. This is a simplified per-response practice estimate, not the official multi-question overall PTE score.""",
     },
     "swt": {
         "label": "Summarize Written Text",
@@ -310,20 +338,29 @@ Convert raw total (max 15) to a scaled score out of 90: strong 12-13/15 is mid-h
         "word_range": (5, 75),
         "word_hint": "Must be exactly ONE sentence, 5–75 words.",
         "criteria": [
-            ("content", "Content", 2),
+            ("content", "Content", 4),
             ("form", "Form", 1),
             ("grammar", "Grammar", 2),
             ("vocabulary", "Vocabulary", 2),
         ],
-        "rubric": """You are an experienced PTE Academic examiner. Score using the OFFICIAL Pearson PTE Academic "Summarize Written Text" rubric.
+        "rubric": """You are an experienced PTE Academic examiner. Score this Summarize Written Text response using the same trait structure and point scale as Pearson's official PTE Academic Score Guide (raw total = 9).
 
-OFFICIAL TRAITS AND MAX POINTS (raw total = 7):
-- Content (0-2): captures the main point(s) of the passage without misrepresenting its topic or purpose. If the response misrepresents the passage, Content = 0 and every other trait must also be 0 (cascade rule).
-- Form (0-1): must be exactly ONE complete sentence, 5-75 words, not written in capitals. If violated, Form = 0 and every trait except Content must also be 0 (cascade rule).
-- Grammar (0-2): correct sentence structure, ideally a main clause plus subordinate clause.
-- Vocabulary (0-2): relevant, appropriate word choice; effective use of synonyms from the passage.
+CASCADE RULE: if Content = 0 or Form = 0, every trait for this response scores 0.
 
-Convert raw total (max 7) to a scaled score out of 90: 6-7/7 is high 80s-90, 5/7 is high 60s-70s, 3-4/7 is 40s-50s, cascaded zero is 10-20.""",
+Content (0-4): how well the summary captures the source passage.
+4 = comprehensive, accurate summary showing full comprehension; effective paraphrasing, extraneous detail removed, main ideas synthesized concisely and coherently, smooth flow with varied connectives.
+3 = adequate summary showing good comprehension; paraphrasing inconsistent, some extraneous detail, main ideas mostly correct with minor omissions, connected but not tightly synthesized.
+2 = partial summary showing basic comprehension; no clear distinction between main points and details, relies heavily on repeating source wording rather than paraphrasing, followable only with effort.
+1 = relevant but not meaningfully summarized; limited comprehension; disconnected excerpts without synthesis; main ideas omitted or misrepresented.
+0 = too limited to score higher; shows no comprehension of the source.
+
+Form (0-1): 1 = written as one single complete sentence, 5-75 words, not in capitals. 0 = not one single sentence, under 5 or over 75 words, or written in capitals.
+
+Grammar (0-2): 2 = correct grammatical structure. 1 = grammatical errors present but don't hinder communication. 0 = defective grammatical structure that could hinder communication.
+
+Vocabulary (0-2): 2 = appropriate word choice. 1 = lexical errors present but don't hinder communication. 0 = defective word choice that could hinder communication.
+
+Convert the raw total (max 9) to a scaled practice score out of 90, proportionally: 8-9/9 is high 80s-90, 6-7/9 is 60s-70s, 3-5/9 is 40s-50s, cascaded zero is 10-20. This is a simplified per-response practice estimate, not the official multi-question overall PTE score.""",
     },
     "sst": {
         "label": "Summarize Spoken Text",
@@ -334,22 +371,32 @@ Convert raw total (max 7) to a scaled score out of 90: 6-7/7 is high 80s-90, 5/7
         "word_range": (50, 70),
         "word_hint": "Aim for 50–70 words. Under 40 or over 100 scores zero.",
         "criteria": [
-            ("content", "Content", 2),
+            ("content", "Content", 4),
             ("form", "Form", 2),
             ("grammar", "Grammar", 2),
             ("vocabulary", "Vocabulary", 2),
             ("spelling", "Spelling", 2),
         ],
-        "rubric": """You are an experienced PTE Academic examiner. Score using the OFFICIAL Pearson PTE Academic "Summarize Spoken Text" rubric.
+        "rubric": """You are an experienced PTE Academic examiner. Score this Summarize Spoken Text response using the same trait structure and point scale as Pearson's official PTE Academic Score Guide (raw total = 12).
 
-OFFICIAL TRAITS AND MAX POINTS (raw total = 10):
-- Content (0-2): addresses all key points of the lecture without misrepresenting its purpose or topic.
-- Form (0-2): full credit for 50-70 words. Under 50 or over 70 reduces the score. Under 40 or over 100 words scores zero on ALL traits (cascade rule).
-- Grammar (0-2): correct sentence structure, concise and clear.
-- Vocabulary (0-2): relevant, academic-appropriate word choice, good use of synonyms.
-- Spelling (0-2): consistent, correct spelling.
+CASCADE RULE: if Content = 0 or Form = 0, every trait for this response scores 0.
 
-Convert raw total (max 10) to a scaled score out of 90: 9-10/10 is high 80s-90, 7-8/10 is 70s, 4-6/10 is 40s-60s, cascaded zero is 10-20.""",
+Content (0-4): how well the summary captures the lecture.
+4 = comprehensive, accurate summary showing full comprehension; effective paraphrasing, extraneous detail removed, main ideas synthesized concisely and coherently, smooth flow with varied connectives.
+3 = adequate summary showing good comprehension; paraphrasing inconsistent, some extraneous detail, main ideas mostly correct with minor omissions, connected but not tightly synthesized.
+2 = partial summary showing basic comprehension; no clear distinction between main points and details, relies heavily on repeating source wording rather than paraphrasing, followable only with effort.
+1 = relevant but not meaningfully summarized; limited comprehension; disconnected excerpts without synthesis; main ideas omitted or misrepresented.
+0 = too limited to score higher; shows no comprehension of the source.
+
+Form (0-2): 2 = 50-70 words. 1 = 40-49 or 71-100 words. 0 = under 40 or over 100 words, all-caps, no punctuation, or bullet points/very short sentences only.
+
+Grammar (0-2): 2 = correct grammatical structure. 1 = grammatical errors present but don't hinder communication. 0 = defective grammatical structure that could hinder communication.
+
+Vocabulary (0-2): 2 = appropriate word choice. 1 = lexical errors present but don't hinder communication. 0 = defective word choice that could hinder communication.
+
+Spelling (0-2): 2 = correct spelling. 1 = one spelling error. 0 = more than one spelling error.
+
+Convert the raw total (max 12) to a scaled practice score out of 90, proportionally: 10-12/12 is high 80s-90, 8-9/12 is 60s-70s, 4-7/12 is 40s-50s, cascaded zero is 10-20. This is a simplified per-response practice estimate, not the official multi-question overall PTE score.""",
     },
 }
 
@@ -902,9 +949,15 @@ for tab, task_key in zip(main_tabs[:-1], TASK_CONFIGS.keys()):
                                     disabled=not response_text.strip())
 
             with right:
+                total_max = sum(m for _, _, m in cfg["criteria"])
                 guide_html = f'<div class="w90-guide-box"><h4>Verification Guide</h4>'
                 for key, name, max_score in cfg["criteria"]:
                     guide_html += f'<div class="w90-guide-item"><b>{esc(name)}</b> — up to {max_score} pts</div>'
+                guide_html += (
+                    f'<div style="font-size:11.5px;color:#1E3A8A;margin-top:10px;padding-top:8px;'
+                    f'border-top:1px solid #BFDBFE;">Trait names and point scale (raw total: {total_max}) '
+                    f'match Pearson\'s official PTE Academic Score Guide.</div>'
+                )
                 guide_html += "</div>"
                 st.markdown(guide_html, unsafe_allow_html=True)
 
