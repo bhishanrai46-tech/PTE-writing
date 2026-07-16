@@ -219,11 +219,19 @@ for _cfg in TASK_CONFIGS.values():
 # Database (Supabase)
 # ---------------------------------------------------------------------------
 def get_db():
-    url = st.secrets.get("SUPABASE_URL", "")
-    key = st.secrets.get("SUPABASE_KEY", "")
+    url = st.secrets.get("SUPABASE_URL", "").strip()
+    key = st.secrets.get("SUPABASE_KEY", "").strip()
     if not url or not key:
         st.error("Supabase credentials missing. Add SUPABASE_URL and SUPABASE_KEY to your app's secrets.")
         st.stop()
+    # Defensive: a URL pasted with a trailing slash or an accidental
+    # /rest/v1 suffix causes PostgREST error PGRST125 (duplicated path,
+    # e.g. .../rest/v1/rest/v1/users). Normalize it down to the bare
+    # project URL Supabase expects (https://xxxx.supabase.co).
+    url = url.rstrip("/")
+    for suffix in ("/rest/v1", "/rest"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
     return create_client(url, key)
 
 
@@ -573,8 +581,10 @@ healthy, health_error = db_healthy(conn)
 if not healthy:
     st.title("PTE Practice Studio")
     st.error(
-        "Can't reach the database. This is almost always one of: the Supabase tables "
-        "haven't been created yet, or Row Level Security is blocking access."
+        "Can't reach the database. Common causes: the Supabase tables haven't been "
+        "created yet, Row Level Security is blocking access, or SUPABASE_URL in your "
+        "secrets has an extra '/rest/v1' or trailing slash on it (it should be just "
+        "https://xxxxx.supabase.co)."
     )
     with st.expander("Technical details"):
         st.code(health_error or "Unknown error")
