@@ -250,12 +250,18 @@ def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-def create_user(conn, username: str, password: str) -> bool:
+def create_user(conn, username: str, password: str):
+    """Returns (success, error). error is None on success, 'duplicate' if the
+    username is genuinely taken, or the raw error string for anything else
+    (permissions, missing table, etc.) so it isn't misreported as 'taken'."""
     try:
         conn.table("users").insert({"username": username, "password_hash": hash_pw(password)}).execute()
-        return True
-    except Exception:
-        return False
+        return True, None
+    except Exception as e:
+        msg = str(e)
+        if "duplicate key" in msg.lower() or "23505" in msg or "already exists" in msg.lower():
+            return False, "duplicate"
+        return False, msg
 
 
 def verify_user(conn, username: str, password: str) -> bool:
@@ -636,14 +642,20 @@ if not st.session_state["user"]:
         if st.button("Create account"):
             if not su.strip() or not sp:
                 st.error("Enter a username and password.")
-            elif create_user(conn, su.strip(), sp):
-                token = create_session(conn, su.strip())
-                st.session_state["user"] = su.strip()
-                st.session_state["session_token"] = token
-                st.query_params["t"] = token
-                st.rerun()
             else:
-                st.error("That username is already taken.")
+                ok, err = create_user(conn, su.strip(), sp)
+                if ok:
+                    token = create_session(conn, su.strip())
+                    st.session_state["user"] = su.strip()
+                    st.session_state["session_token"] = token
+                    st.query_params["t"] = token
+                    st.rerun()
+                elif err == "duplicate":
+                    st.error("That username is already taken.")
+                else:
+                    st.error("Could not create the account — a database error occurred.")
+                    with st.expander("Technical details"):
+                        st.code(err)
 
     st.stop()
 
