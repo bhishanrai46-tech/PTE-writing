@@ -1,111 +1,96 @@
 import hashlib
 import json
 import re
-import sqlite3
 from datetime import date, datetime
-from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
 import anthropic
+import altair as alt
+import pandas as pd
+from supabase import create_client
 
-DB_PATH = Path("pte_app.db")
-
-st.set_page_config(page_title="PTE Practice Studio — Get to 90", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="PTE Practice Studio", layout="wide")
 
 # ---------------------------------------------------------------------------
-# Styling — warm "exam studio" theme. A broad reset forces every element to
-# the ink color first, then specific components (buttons, sidebar, badges,
-# stamp) override with their own colors afterward. This ordering matters:
-# it's what stops any text from silently inheriting a white/dark default
-# from the visitor's system theme, no matter which Streamlit widget it is.
+# Styling — plain light theme. A broad reset forces every element to a dark
+# ink color on a white/near-white background first; specific components then
+# override on top. Buttons use ">" + "*" catch-all selectors so their label
+# text can never silently inherit an invisible color, regardless of which
+# internal tag Streamlit renders it in.
 # ---------------------------------------------------------------------------
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+    :root {
+        --bg: #FFFFFF; --surface: #FFFFFF; --border: #E2E8F0;
+        --text: #0F172A; --text-secondary: #475569;
+        --accent: #2563EB; --accent-hover: #1D4ED8;
+        --success: #15803D; --success-bg: #F0FDF4;
+        --warning: #B45309; --warning-bg: #FFFBEB;
+        --danger: #B91C1C; --danger-bg: #FEF2F2;
+        --sidebar-bg: #F8FAFC;
+    }
+    .stApp, body, .main, [data-testid="stAppViewContainer"] { background-color: var(--bg) !important; }
+    .main * { color: var(--text); }
+    h1, h2, h3, h4 { font-family: 'Inter', -apple-system, sans-serif !important; color: var(--text) !important; font-weight: 600 !important; letter-spacing: -0.01em; }
+    p, span, label, li, div, small { color: var(--text); }
 
-    /* ---- Broad reset: everything defaults to ink-on-paper ---- */
-    .stApp, body, .main, [data-testid="stAppViewContainer"] { background-color: #F6F1E4 !important; }
-    .main * { color: #24344A; }
-    h1, h2, h3, h4 { font-family: 'Fraunces', Georgia, serif !important; color: #1D2B3A !important; letter-spacing: -0.01em; }
-    p, span, label, li, div, small { color: #24344A; }
+    [data-testid="stMarkdownContainer"] * { color: var(--text) !important; }
+    [data-testid="stCaptionContainer"] * { color: var(--text-secondary) !important; }
+    [data-testid="stExpander"] { background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: 6px; }
+    [data-testid="stExpander"] summary, [data-testid="stExpander"] summary * { color: var(--text) !important; }
+    [data-testid="stExpander"] div { color: var(--text) !important; }
+    [data-testid="stMetricValue"], [data-testid="stMetricLabel"] { color: var(--text) !important; }
+    code, pre { color: var(--text) !important; background: #F1F5F9 !important; }
 
-    /* Streamlit-specific containers that often carry their own theme color */
-    [data-testid="stMarkdownContainer"] * { color: #24344A !important; }
-    [data-testid="stCaptionContainer"] * { color: #6B6355 !important; }
-    [data-testid="stExpander"] { background: #FFFFFF !important; border: 1px solid #E3D9BF !important; border-radius: 8px; }
-    [data-testid="stExpander"] summary, [data-testid="stExpander"] summary * { color: #1D2B3A !important; }
-    [data-testid="stExpander"] div { color: #24344A !important; }
-    [data-testid="stMetricValue"], [data-testid="stMetricLabel"] { color: #1D2B3A !important; }
-    [data-testid="stAlertContainer"] * { color: inherit !important; }
-    [data-testid="stVerticalBlock"] { color: #24344A; }
-    code, pre { color: #1D2B3A !important; }
+    [data-testid="stSidebar"] { background-color: var(--sidebar-bg) !important; border-right: 1px solid var(--border); }
+    [data-testid="stSidebar"] * { color: var(--text) !important; }
 
-    /* Sidebar */
-    [data-testid="stSidebar"] { background-color: #EDE4CB !important; border-right: 1px solid #DDCFA8; }
-    [data-testid="stSidebar"] * { color: #1D2B3A !important; }
+    .stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid var(--border); }
+    .stTabs [data-baseweb="tab"] { color: var(--text-secondary) !important; font-weight: 500; }
+    .stTabs [aria-selected="true"] { color: var(--accent) !important; border-bottom-color: var(--accent) !important; }
 
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] { gap: 4px; }
-    .stTabs [data-baseweb="tab"] { color: #6B6355 !important; font-weight: 600; }
-    .stTabs [aria-selected="true"] { color: #A93226 !important; border-bottom-color: #A93226 !important; }
-
-    /* Inputs */
-    .stTextArea textarea { background-color: #1D2B3A !important; color: #F6F1E4 !important; border-radius: 8px; font-size: 15px; }
-    .stTextArea textarea::placeholder { color: #93A0AC !important; }
-    .stTextInput input { background-color: #FFFFFF !important; color: #1D2B3A !important; border: 1px solid #D8CBA6 !important; border-radius: 6px; }
-    .stTextInput label, .stTextArea label { color: #1D2B3A !important; font-weight: 600 !important; }
+    .stTextArea textarea { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 6px; font-size: 14.5px; }
+    .stTextArea textarea::placeholder { color: #94A3B8 !important; }
+    .stTextInput input { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 6px; }
+    .stTextInput label, .stTextArea label { color: var(--text) !important; font-weight: 500 !important; }
 
     /* Buttons */
-    .stButton button { background-color: #1D2B3A !important; color: #F6F1E4 !important; border: none !important; border-radius: 6px !important; font-weight: 600; transition: transform 0.1s ease, background 0.15s ease; }
-    .stButton button:hover { background-color: #A93226 !important; color: #FFFFFF !important; transform: translateY(-1px); }
-    .stButton button p { color: inherit !important; }
-    .stButton button[kind="primary"] { background-color: #A93226 !important; }
-    .stButton button[kind="primary"]:hover { background-color: #8A281E !important; }
+    .stButton > button, .stButton > button * { color: var(--text) !important; }
+    .stButton > button { background-color: #FFFFFF !important; border: 1px solid var(--border) !important; border-radius: 6px !important; font-weight: 500; }
+    .stButton > button:hover, .stButton > button:hover * { color: var(--accent) !important; }
+    .stButton > button:hover { border-color: var(--accent) !important; }
+    .stButton > button[kind="primary"], .stButton > button[kind="primary"] * { color: #FFFFFF !important; }
+    .stButton > button[kind="primary"] { background-color: var(--accent) !important; border-color: var(--accent) !important; }
+    .stButton > button[kind="primary"]:hover, .stButton > button[kind="primary"]:hover * { color: #FFFFFF !important; }
+    .stButton > button[kind="primary"]:hover { background-color: var(--accent-hover) !important; border-color: var(--accent-hover) !important; }
 
-    /* Radio / checkbox */
-    .stRadio label, .stCheckbox label { color: #1D2B3A !important; }
+    .stRadio label, .stCheckbox label { color: var(--text) !important; }
+    .stProgress > div > div { background-color: var(--accent) !important; }
 
-    /* Progress bar */
-    .stProgress > div > div { background-color: #A93226 !important; }
+    .pte-badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .pte-badge.great { background: var(--success-bg); color: var(--success) !important; }
+    .pte-badge.good { background: var(--warning-bg); color: var(--warning) !important; }
+    .pte-badge.push { background: var(--danger-bg); color: var(--danger) !important; }
 
-    /* ---- Brand elements ---- */
-    .pte-hero { text-align: center; margin-bottom: 6px; }
-    .pte-hero .kicker { font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: #A9822E !important; font-weight: 600; }
+    .pte-sentence { font-size: 14px; line-height: 1.6; margin-bottom: 10px; padding: 9px 12px; border-radius: 6px; border-left: 3px solid var(--border); }
+    .pte-sentence.ok { border-left-color: var(--success); background: #FAFDFB; }
+    .pte-sentence.err { border-left-color: var(--danger); background: #FFFBFA; }
+    .pte-sentence .orig-bad { color: var(--danger) !important; text-decoration: line-through; }
+    .pte-sentence .fixed { color: var(--success) !important; font-weight: 600; }
+    .pte-sentence .why { display: block; font-size: 12px; color: var(--text-secondary) !important; margin-top: 3px; }
+    .pte-sentence .ok-text { color: var(--text) !important; }
 
-    .pte-stamp-wrap { display: flex; justify-content: center; margin: 8px 0 6px; }
-    .pte-stamp {
-        width: 148px; height: 148px; border-radius: 50%;
-        border: 3px solid #A93226; display: flex; flex-direction: column;
-        align-items: center; justify-content: center;
-        background: radial-gradient(circle at 35% 30%, #FFFDF8, #FBF3E3);
-        box-shadow: 0 4px 14px rgba(169,50,38,0.18);
-        transform: rotate(-5deg); font-family: 'Fraunces', Georgia, serif;
-    }
-    .pte-stamp .num { font-size: 46px; font-weight: 700; line-height: 1; color: #A93226 !important; }
-    .pte-stamp .of90 { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; margin-top: 4px; color: #A93226 !important; }
-    .pte-stamp .max { font-size: 10px; color: #9C7A2E !important; margin-top: 2px; }
-    .pte-summary { font-family: 'Fraunces', Georgia, serif; font-size: 15.5px; color: #445167 !important; text-align: center; max-width: 560px; margin: 6px auto 0; }
+    .pte-corrected-box { background: #FAFAFA; border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; font-size: 14px; line-height: 1.7; color: var(--text) !important; }
+    .pte-tip { background: #F8FAFC; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 4px; padding: 8px 12px; margin-bottom: 6px; font-size: 13.5px; color: var(--text) !important; }
+    .pte-streak { background: var(--sidebar-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; text-align: center; }
+    .pte-streak .n { font-size: 22px; font-weight: 700; color: var(--text) !important; }
 
-    .pte-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12.5px; font-weight: 600; margin: 2px 4px 2px 0; }
-    .pte-badge.great { background: #E4F1E6; color: #2F6B3E !important; }
-    .pte-badge.good { background: #FBF0DA; color: #8A6A1E !important; }
-    .pte-badge.push { background: #FBEAE7; color: #A44238 !important; }
-
-    .pte-sentence { font-size: 14.5px; line-height: 1.7; margin-bottom: 12px; padding: 10px 14px; border-radius: 8px; }
-    .pte-sentence.ok { background: #EAF2EA; }
-    .pte-sentence.err { background: #FBEAE7; }
-    .pte-sentence .orig-bad { color: #A44238 !important; text-decoration: line-through; }
-    .pte-sentence .fixed { color: #2F6B3E !important; font-weight: 600; }
-    .pte-sentence .why { display: block; font-size: 12px; color: #6B6355 !important; margin-top: 4px; }
-    .pte-sentence .ok-text { color: #1D2B3A !important; }
-
-    .pte-corrected-box { background: #FFFFFF; border: 1px solid #E3D9BF; border-radius: 10px; padding: 18px 20px; font-size: 14.5px; line-height: 1.75; color: #1D2B3A !important; }
-    .pte-tip { background: linear-gradient(135deg, #FBF0DA, #F3E4BB); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; font-size: 14px; color: #4A3B1A !important; border-left: 3px solid #A9822E; }
-    .pte-streak { background: #1D2B3A; color: #F6F1E4 !important; border-radius: 10px; padding: 14px 18px; text-align: center; }
-    .pte-streak * { color: #F6F1E4 !important; }
-    .pte-streak .n { font-size: 28px; font-weight: 700; font-family: 'Fraunces', Georgia, serif; }
+    .pte-score-box { text-align: center; padding: 18px 0 6px; }
+    .pte-score-box .num { font-size: 48px; font-weight: 700; color: var(--text) !important; line-height: 1; }
+    .pte-score-box .of90 { font-size: 12px; color: var(--text-secondary) !important; letter-spacing: 0.06em; text-transform: uppercase; margin-top: 2px; }
+    .pte-summary { font-size: 14.5px; color: var(--text-secondary) !important; text-align: center; max-width: 560px; margin: 8px auto 0; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -144,7 +129,6 @@ Respond with ONLY raw JSON, no markdown fences, no preamble, in this exact shape
 TASK_CONFIGS = {
     "essay": {
         "label": "Essay",
-        "icon": "✍️",
         "context_label": "Essay prompt (optional, improves accuracy)",
         "context_placeholder": "Paste the essay question here...",
         "response_label": "Your essay",
@@ -175,7 +159,6 @@ Convert raw total (max 15) to a scaled score out of 90: strong 12-13/15 is mid-h
     },
     "swt": {
         "label": "Summarize Written Text",
-        "icon": "📄",
         "context_label": "Passage to summarize (up to ~300 words)",
         "context_placeholder": "Paste the reading passage here...",
         "response_label": "Your one-sentence summary",
@@ -200,7 +183,6 @@ Convert raw total (max 7) to a scaled score out of 90: 6-7/7 is high 80s-90, 5/7
     },
     "sst": {
         "label": "Summarize Spoken Text",
-        "icon": "🎧",
         "context_label": "Lecture transcript (what you'll listen to)",
         "context_placeholder": "Paste or write the lecture/talk transcript here...",
         "response_label": "Your summary (50–70 words)",
@@ -233,74 +215,15 @@ for _cfg in TASK_CONFIGS.values():
 
 
 # ---------------------------------------------------------------------------
-# Database
+# Database (Supabase)
 # ---------------------------------------------------------------------------
 def get_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS submissions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            task_key TEXT NOT NULL DEFAULT 'essay',
-            created_at TEXT NOT NULL,
-            context_text TEXT,
-            response_text TEXT,
-            overall INTEGER,
-            result_json TEXT
-        )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS usage (
-            username TEXT NOT NULL,
-            day TEXT NOT NULL,
-            count INTEGER NOT NULL,
-            PRIMARY KEY (username, day)
-        )"""
-    )
-    conn.commit()
-    _migrate_submissions_schema(conn)
-    return conn
-
-
-def _migrate_submissions_schema(conn):
-    """Upgrades a submissions table created by an older version of this app
-    (which had 'prompt'/'essay' columns instead of 'task_key'/'context_text'/
-    'response_text') so existing deployments don't crash after an update."""
-    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(submissions)").fetchall()}
-
-    new_cols = {
-        "task_key": "ALTER TABLE submissions ADD COLUMN task_key TEXT DEFAULT 'essay'",
-        "context_text": "ALTER TABLE submissions ADD COLUMN context_text TEXT",
-        "response_text": "ALTER TABLE submissions ADD COLUMN response_text TEXT",
-    }
-    for col, ddl in new_cols.items():
-        if col not in existing_cols:
-            try:
-                conn.execute(ddl)
-            except sqlite3.OperationalError:
-                pass
-
-    conn.commit()
-    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(submissions)").fetchall()}
-
-    # Backfill from the old column names if this was an old-schema database.
-    if "prompt" in existing_cols and "essay" in existing_cols:
-        conn.execute(
-            "UPDATE submissions SET context_text = prompt WHERE context_text IS NULL AND prompt IS NOT NULL"
-        )
-        conn.execute(
-            "UPDATE submissions SET response_text = essay WHERE response_text IS NULL AND essay IS NOT NULL"
-        )
-    conn.execute("UPDATE submissions SET task_key = 'essay' WHERE task_key IS NULL")
-    conn.commit()
+    url = st.secrets.get("SUPABASE_URL", "")
+    key = st.secrets.get("SUPABASE_KEY", "")
+    if not url or not key:
+        st.error("Supabase credentials missing. Add SUPABASE_URL and SUPABASE_KEY to your app's secrets.")
+        st.stop()
+    return create_client(url, key)
 
 
 def hash_pw(password: str) -> str:
@@ -309,59 +232,74 @@ def hash_pw(password: str) -> str:
 
 def create_user(conn, username: str, password: str) -> bool:
     try:
-        conn.execute(
-            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-            (username, hash_pw(password), datetime.now().isoformat()),
-        )
-        conn.commit()
+        conn.table("users").insert({"username": username, "password_hash": hash_pw(password)}).execute()
         return True
-    except sqlite3.IntegrityError:
+    except Exception:
         return False
 
 
 def verify_user(conn, username: str, password: str) -> bool:
-    row = conn.execute("SELECT password_hash FROM users WHERE username = ?", (username,)).fetchone()
-    return bool(row) and row[0] == hash_pw(password)
+    res = conn.table("users").select("password_hash").eq("username", username).execute()
+    rows = res.data or []
+    return bool(rows) and rows[0]["password_hash"] == hash_pw(password)
 
 
 def save_submission(conn, username: str, task_key: str, context_text: str, response_text: str, result: dict):
-    conn.execute(
-        "INSERT INTO submissions (username, task_key, created_at, context_text, response_text, overall, result_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (username, task_key, datetime.now().isoformat(timespec="seconds"), context_text, response_text,
-         int(result.get("overall", 0)), json.dumps(result)),
-    )
-    conn.commit()
+    conn.table("submissions").insert({
+        "username": username,
+        "task_key": task_key,
+        "context_text": context_text,
+        "response_text": response_text,
+        "overall": int(result.get("overall", 0)),
+        "result_json": result,
+    }).execute()
 
 
 def get_history(conn, username: str, task_key: str):
-    return conn.execute(
-        "SELECT created_at, context_text, response_text, overall, result_json FROM submissions "
-        "WHERE username = ? AND task_key = ? ORDER BY id DESC",
-        (username, task_key),
-    ).fetchall()
+    res = (
+        conn.table("submissions")
+        .select("created_at,context_text,response_text,overall,result_json")
+        .eq("username", username)
+        .eq("task_key", task_key)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    rows = []
+    for r in res.data or []:
+        rj = r.get("result_json")
+        rj_str = rj if isinstance(rj, str) else json.dumps(rj or {})
+        rows.append((r["created_at"], r.get("context_text"), r.get("response_text"), r.get("overall"), rj_str))
+    return rows
 
 
 def get_all_history(conn, username: str):
-    return conn.execute(
-        "SELECT task_key, created_at, overall FROM submissions WHERE username = ? ORDER BY id ASC",
-        (username,),
-    ).fetchall()
+    res = (
+        conn.table("submissions")
+        .select("task_key,created_at,overall")
+        .eq("username", username)
+        .order("created_at")
+        .execute()
+    )
+    return [(r["task_key"], r["created_at"], r["overall"]) for r in (res.data or [])]
 
 
 def get_usage_count(conn, username: str) -> int:
     today = str(date.today())
-    row = conn.execute("SELECT count FROM usage WHERE username = ? AND day = ?", (username, today)).fetchone()
-    return row[0] if row else 0
+    res = conn.table("usage").select("count").eq("username", username).eq("day", today).execute()
+    rows = res.data or []
+    return rows[0]["count"] if rows else 0
 
 
 def bump_usage_count(conn, username: str):
     today = str(date.today())
-    conn.execute(
-        """INSERT INTO usage (username, day, count) VALUES (?, ?, 1)
-           ON CONFLICT(username, day) DO UPDATE SET count = count + 1""",
-        (username, today),
-    )
-    conn.commit()
+    current = get_usage_count(conn, username)
+    if current == 0:
+        try:
+            conn.table("usage").insert({"username": username, "day": today, "count": 1}).execute()
+            return
+        except Exception:
+            pass  # row already exists (race condition) — fall through to update
+    conn.table("usage").update({"count": current + 1}).eq("username", username).eq("day", today).execute()
 
 
 def compute_streak(all_history) -> int:
@@ -375,6 +313,62 @@ def compute_streak(all_history) -> int:
         streak += 1
         cursor = date.fromordinal(cursor.toordinal() - 1)
     return streak
+
+
+def fixed_score_chart(scores: list):
+    """A plain, static line chart — no scroll-zoom, no drag-pan, fixed 0-90 axis."""
+    df = pd.DataFrame({"Attempt": list(range(1, len(scores) + 1)), "Score": scores})
+    chart = (
+        alt.Chart(df)
+        .mark_line(point=True, color="#2563EB")
+        .encode(
+            x=alt.X("Attempt:O", title="Attempt"),
+            y=alt.Y("Score:Q", title="Score", scale=alt.Scale(domain=[0, 90])),
+            tooltip=["Attempt", "Score"],
+        )
+        .properties(height=220)
+        .interactive(False)
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+
+def get_criteria_averages(conn, username: str, task_key: str) -> dict:
+    history = get_history(conn, username, task_key)
+    sums, counts = {}, {}
+    for row in history:
+        try:
+            result = json.loads(row[4])
+        except Exception:
+            continue
+        for k, v in result.get("criteria", {}).items():
+            sums[k] = sums.get(k, 0) + v
+            counts[k] = counts.get(k, 0) + 1
+    return {k: sums[k] / counts[k] for k in sums if counts.get(k)}
+
+
+def get_recent_tips(conn, username: str, task_key: str, limit: int = 3) -> list:
+    history = get_history(conn, username, task_key)
+    tips = []
+    for row in history[:limit]:
+        try:
+            result = json.loads(row[4])
+        except Exception:
+            continue
+        for t in result.get("tips", []):
+            if t not in tips:
+                tips.append(t)
+    return tips
+
+
+TIP_LIBRARY = {
+    "content": "Before writing, list every sub-point the prompt or passage raises, and check each one appears in your response.",
+    "form": "Count your words as you write. Aim for the middle of the target range rather than just barely inside it.",
+    "development": "Give each paragraph one clear topic sentence, and connect ideas explicitly with words like however, therefore, in addition.",
+    "grammar": "Reread each sentence in isolation, backward if needed — it makes subject-verb agreement and article errors easier to spot.",
+    "linguistic_range": "Practice rewriting the same idea two ways (active vs passive, simple vs complex) to build sentence variety.",
+    "vocabulary": "Keep a running list of synonyms for words you overuse (important, believe, show) and rotate them in.",
+    "spelling": "Pick one English variant (US or UK) and use it consistently — mixing color/colour or organize/organise costs points.",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -448,10 +442,10 @@ def call_claude(api_key: str, task_key: str, context_text: str, response_text: s
 
 def score_badge(overall: int) -> str:
     if overall >= 79:
-        return '<span class="pte-badge great">🌟 On track for 79+</span>'
+        return '<span class="pte-badge great">On track for 79+</span>'
     if overall >= 65:
-        return '<span class="pte-badge good">👍 Solid, keep pushing</span>'
-    return '<span class="pte-badge push">💪 Room to grow — you\'ve got this</span>'
+        return '<span class="pte-badge good">Solid, keep pushing</span>'
+    return '<span class="pte-badge push">Room to grow</span>'
 
 
 def tts_button(text: str, key: str):
@@ -459,10 +453,10 @@ def tts_button(text: str, key: str):
     components.html(
         f"""
         <div style="font-family:Inter,sans-serif;">
-        <button id="playBtn_{key}" style="background:#1D2B3A;color:#F6F1E4;border:none;border-radius:6px;
-            padding:10px 18px;font-weight:600;cursor:pointer;">🔊 Play lecture aloud</button>
-        <button id="stopBtn_{key}" style="background:transparent;color:#A93226;border:1px solid #A93226;border-radius:6px;
-            padding:10px 18px;font-weight:600;cursor:pointer;margin-left:8px;">⏹ Stop</button>
+        <button id="playBtn_{key}" style="background:#2563EB;color:#FFFFFF;border:1px solid #2563EB;border-radius:6px;
+            padding:10px 18px;font-weight:500;cursor:pointer;">Play lecture aloud</button>
+        <button id="stopBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
+            padding:10px 18px;font-weight:500;cursor:pointer;margin-left:8px;">Stop</button>
         <script>
         const text_{key} = {safe_text};
         document.getElementById('playBtn_{key}').onclick = function() {{
@@ -485,8 +479,8 @@ def render_result(result: dict, task_key: str):
     cfg = TASK_CONFIGS[task_key]
     overall = max(10, min(90, round(result.get("overall", 0))))
     st.markdown(
-        f'<div class="pte-stamp-wrap"><div class="pte-stamp"><span class="num">{overall}</span>'
-        f'<span class="of90">out of 90</span></div></div>',
+        f'<div class="pte-score-box"><span class="num">{overall}</span><br>'
+        f'<span class="of90">out of 90</span></div>',
         unsafe_allow_html=True,
     )
     st.markdown(f'<div style="text-align:center;">{score_badge(overall)}</div>', unsafe_allow_html=True)
@@ -520,7 +514,7 @@ def render_result(result: dict, task_key: str):
                 f'<span class="why">{esc(item.get("explanation",""))}</span>'
             )
         else:
-            body = f'<span class="ok-text">✓ {esc(item.get("original",""))}</span>'
+            body = f'<span class="ok-text">{esc(item.get("original",""))}</span>'
         st.markdown(f'<div class="pte-sentence {css_class}">{body}</div>', unsafe_allow_html=True)
 
     st.markdown("---")
@@ -530,7 +524,7 @@ def render_result(result: dict, task_key: str):
     st.markdown("---")
     st.subheader("Tips to work on")
     for tip in result.get("tips", []):
-        st.markdown(f'<div class="pte-tip">💡 {esc(tip)}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -542,11 +536,7 @@ if "user" not in st.session_state:
     st.session_state["user"] = None
 
 if not st.session_state["user"]:
-    st.markdown(
-        '<div class="pte-hero"><div class="kicker">PTE Practice Studio</div>'
-        '<h1>🎓 Write. Get scored. Improve.</h1></div>',
-        unsafe_allow_html=True,
-    )
+    st.title("PTE Practice Studio")
     st.caption("Log in or create a free account to save your work and track your score history over time.")
     tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
 
@@ -581,7 +571,7 @@ DAILY_LIMIT = int(st.secrets.get("DAILY_LIMIT", 20))
 secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
 
 with st.sidebar:
-    st.write(f"👋 Logged in as **{st.session_state['user']}**")
+    st.write(f"Logged in as **{st.session_state['user']}**")
     if st.button("Log out"):
         st.session_state["user"] = None
         st.rerun()
@@ -598,22 +588,18 @@ with st.sidebar:
     if streak > 0:
         st.markdown("---")
         st.markdown(
-            f'<div class="pte-streak">🔥 <span class="n">{streak}</span><br>day streak</div>',
+            f'<div class="pte-streak"><span class="n">{streak}</span><br>day streak</div>',
             unsafe_allow_html=True,
         )
 
 # ---------------------------------------------------------------------------
 # Main layout
 # ---------------------------------------------------------------------------
-st.markdown(
-    '<div class="pte-hero"><div class="kicker">PTE Practice Studio</div>'
-    '<h1>🎓 Write. Get scored. Improve.</h1></div>',
-    unsafe_allow_html=True,
-)
+st.title("PTE Practice Studio")
 st.caption("Examiner-style scoring against the official Pearson rubric, powered by Claude.")
 
-task_tab_labels = [f"{cfg['icon']} {cfg['label']}" for cfg in TASK_CONFIGS.values()]
-main_tabs = st.tabs(task_tab_labels + ["📊 My Progress"])
+task_tab_labels = [cfg["label"] for cfg in TASK_CONFIGS.values()]
+main_tabs = st.tabs(task_tab_labels + ["My Progress"])
 
 for tab, task_key in zip(main_tabs[:-1], TASK_CONFIGS.keys()):
     cfg = TASK_CONFIGS[task_key]
@@ -667,7 +653,7 @@ for tab, task_key in zip(main_tabs[:-1], TASK_CONFIGS.keys()):
             else:
                 scores = [row[3] for row in history][::-1]
                 if len(scores) > 1:
-                    st.line_chart(scores)
+                    fixed_score_chart(scores)
                 for created_at, hcontext, hresponse, hoverall, hresult_json in history:
                     with st.expander(f"{created_at[:16].replace('T',' ')} — Score: {hoverall}/90"):
                         if hcontext:
@@ -692,11 +678,43 @@ with main_tabs[-1]:
         c3.metric("Best score", f"{best}/90")
         c4.metric("Day streak", streak)
 
-        st.markdown("---")
         for task_key, cfg in TASK_CONFIGS.items():
             task_scores = [r[2] for r in all_hist if r[0] == task_key]
-            if task_scores:
-                st.subheader(f"{cfg['icon']} {cfg['label']}")
-                st.caption(f"{len(task_scores)} attempts · average {round(sum(task_scores)/len(task_scores))}/90 · latest {task_scores[-1]}/90")
-                if len(task_scores) > 1:
-                    st.line_chart(task_scores)
+            if not task_scores:
+                continue
+
+            st.markdown("---")
+            st.subheader(cfg["label"])
+            st.caption(f"{len(task_scores)} attempts · average {round(sum(task_scores)/len(task_scores))}/90 · latest {task_scores[-1]}/90")
+            if len(task_scores) > 1:
+                fixed_score_chart(task_scores)
+
+            col_weak, col_tips = st.columns(2)
+
+            with col_weak:
+                st.markdown("**What to improve**")
+                averages = get_criteria_averages(conn, st.session_state["user"], task_key)
+                if not averages:
+                    st.caption("Not enough data yet.")
+                else:
+                    crit_lookup = {key: (name, max_score) for key, name, max_score in cfg["criteria"]}
+                    ranked = sorted(
+                        averages.items(),
+                        key=lambda kv: kv[1] / crit_lookup[kv[0]][1] if kv[0] in crit_lookup else 1,
+                    )
+                    for key, avg_score in ranked[:2]:
+                        if key not in crit_lookup:
+                            continue
+                        name, max_score = crit_lookup[key]
+                        st.write(f"{name} — averaging {avg_score:.1f} / {max_score}")
+                        st.progress(min(1.0, avg_score / max_score if max_score else 0))
+                        st.caption(TIP_LIBRARY.get(key, "Focus extra practice on this area."))
+
+            with col_tips:
+                st.markdown("**Tips from your recent work**")
+                recent_tips = get_recent_tips(conn, st.session_state["user"], task_key, limit=3)
+                if not recent_tips:
+                    st.caption("Not enough data yet.")
+                else:
+                    for tip in recent_tips:
+                        st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
