@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import secrets
+import random
 from datetime import date, datetime
 
 import streamlit as st
@@ -11,27 +12,39 @@ import altair as alt
 import pandas as pd
 from supabase import create_client
 
-st.set_page_config(page_title="PTE Practice Studio", layout="wide")
+APP_NAME = "Write90 PTE"
+APP_TAGLINE = "Flawless Grammar. Perfect Logic. Target 90."
+
+st.set_page_config(page_title=APP_NAME, layout="wide")
 
 # ---------------------------------------------------------------------------
-# Styling — plain light theme. A broad reset forces every element to a dark
-# ink color on a white/near-white background first; specific components then
-# override on top. Buttons use ">" + "*" catch-all selectors so their label
-# text can never silently inherit an invisible color, regardless of which
-# internal tag Streamlit renders it in.
+# Styling — "Write90 PTE" theme. Deep slate/charcoal for header and sidebar,
+# clean light canvas for the workspace, royal blue accent throughout. A
+# broad reset still forces every element to a dark ink color on light
+# backgrounds first; specific components override on top so nothing can
+# render invisible regardless of Streamlit's internal markup.
 # ---------------------------------------------------------------------------
 st.markdown(
     """
     <style>
     :root {
-        --bg: #FFFFFF; --surface: #FFFFFF; --border: #E2E8F0;
+        --bg: #F8FAFC; --surface: #FFFFFF; --border: #E2E8F0;
         --text: #0F172A; --text-secondary: #475569;
         --accent: #2563EB; --accent-hover: #1D4ED8;
+        --slate: #0F172A; --charcoal: #1E293B;
         --success: #15803D; --success-bg: #F0FDF4;
         --warning: #B45309; --warning-bg: #FFFBEB;
         --danger: #B91C1C; --danger-bg: #FEF2F2;
-        --sidebar-bg: #F8FAFC;
+        --guide-bg: #EFF6FF;
+        --sidebar-bg: #0F172A;
     }
+
+    /* Hide standard Streamlit chrome: hamburger menu, footer, header bar */
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    header[data-testid="stHeader"] { background: transparent; height: 0; }
+    [data-testid="stToolbar"] { visibility: hidden; }
+
     .stApp, body, .main, [data-testid="stAppViewContainer"] { background-color: var(--bg) !important; }
     .main * { color: var(--text); }
     h1, h2, h3, h4 { font-family: 'Inter', -apple-system, sans-serif !important; color: var(--text) !important; font-weight: 600 !important; letter-spacing: -0.01em; }
@@ -39,36 +52,101 @@ st.markdown(
 
     [data-testid="stMarkdownContainer"] * { color: var(--text) !important; }
     [data-testid="stCaptionContainer"] * { color: var(--text-secondary) !important; }
-    [data-testid="stExpander"] { background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: 6px; }
+    [data-testid="stExpander"] { background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: 8px; }
     [data-testid="stExpander"] summary, [data-testid="stExpander"] summary * { color: var(--text) !important; }
     [data-testid="stExpander"] div { color: var(--text) !important; }
     [data-testid="stMetricValue"], [data-testid="stMetricLabel"] { color: var(--text) !important; }
     code, pre { color: var(--text) !important; background: #F1F5F9 !important; }
 
-    [data-testid="stSidebar"] { background-color: var(--sidebar-bg) !important; border-right: 1px solid var(--border); }
-    [data-testid="stSidebar"] * { color: var(--text) !important; }
+    /* Sidebar — dark slate blueprint */
+    [data-testid="stSidebar"] { background-color: var(--sidebar-bg) !important; border-right: 1px solid #1E293B; }
+    [data-testid="stSidebar"] * { color: #E2E8F0 !important; }
+    [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * { color: #94A3B8 !important; }
+    [data-testid="stSidebar"] .stButton > button { background-color: #1E293B !important; border: 1px solid #334155 !important; color: #E2E8F0 !important; }
+    [data-testid="stSidebar"] .stButton > button:hover { border-color: var(--accent) !important; color: #FFFFFF !important; }
+    [data-testid="stSidebar"] .stTextInput input { background-color: #1E293B !important; color: #E2E8F0 !important; border: 1px solid #334155 !important; }
+    [data-testid="stSidebar"] .stProgress > div > div { background-color: var(--accent) !important; }
+    [data-testid="stSidebar"] .stProgress { background-color: #1E293B !important; border-radius: 4px; }
 
     .stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid var(--border); }
-    .stTabs [data-baseweb="tab"] { color: var(--text-secondary) !important; font-weight: 500; }
+    .stTabs [data-baseweb="tab"] { color: var(--text-secondary) !important; font-weight: 600; }
     .stTabs [aria-selected="true"] { color: var(--accent) !important; border-bottom-color: var(--accent) !important; }
 
-    .stTextArea textarea { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 6px; font-size: 14.5px; }
+    .stTextArea textarea { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 8px; font-size: 14.5px; padding: 12px 14px !important; }
+    .stTextArea textarea:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(37,99,235,0.15) !important; }
     .stTextArea textarea::placeholder { color: #94A3B8 !important; }
     .stTextInput input { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 6px; }
-    .stTextInput label, .stTextArea label { color: var(--text) !important; font-weight: 500 !important; }
+    .stTextInput input:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(37,99,235,0.15) !important; }
+    .stTextInput label, .stTextArea label { color: var(--text) !important; font-weight: 600 !important; }
+    .stSelectbox label { color: var(--text) !important; font-weight: 600 !important; }
 
     /* Buttons */
     .stButton > button, .stButton > button * { color: var(--text) !important; }
-    .stButton > button { background-color: #FFFFFF !important; border: 1px solid var(--border) !important; border-radius: 6px !important; font-weight: 500; }
+    .stButton > button { background-color: #FFFFFF !important; border: 1px solid var(--border) !important; border-radius: 8px !important; font-weight: 500; transition: all 0.15s ease; }
     .stButton > button:hover, .stButton > button:hover * { color: var(--accent) !important; }
     .stButton > button:hover { border-color: var(--accent) !important; }
     .stButton > button[kind="primary"], .stButton > button[kind="primary"] * { color: #FFFFFF !important; }
-    .stButton > button[kind="primary"] { background-color: var(--accent) !important; border-color: var(--accent) !important; }
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(180deg, #2563EB, #1D4ED8) !important;
+        border-color: #1D4ED8 !important;
+        font-weight: 700 !important;
+        text-shadow: 0 1px 1px rgba(0,0,0,0.15);
+        box-shadow: 0 2px 8px rgba(37,99,235,0.35);
+    }
     .stButton > button[kind="primary"]:hover, .stButton > button[kind="primary"]:hover * { color: #FFFFFF !important; }
-    .stButton > button[kind="primary"]:hover { background-color: var(--accent-hover) !important; border-color: var(--accent-hover) !important; }
+    .stButton > button[kind="primary"]:hover {
+        background: linear-gradient(180deg, #3B72F0, #2563EB) !important;
+        box-shadow: 0 4px 14px rgba(37,99,235,0.5);
+        transform: translateY(-1px);
+    }
 
     .stRadio label, .stCheckbox label { color: var(--text) !important; }
     .stProgress > div > div { background-color: var(--accent) !important; }
+
+    /* ---- Write90 brand elements ---- */
+    .w90-banner {
+        background: linear-gradient(120deg, #0F172A, #1E293B);
+        border-radius: 12px;
+        padding: 22px 28px;
+        margin-bottom: 22px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+    .w90-banner .w90-title { font-family: 'Inter', sans-serif; font-size: 26px; font-weight: 700; color: #FFFFFF !important; margin: 0; }
+    .w90-banner .w90-tag { font-size: 13.5px; color: #94A3B8 !important; margin-top: 4px; }
+    .w90-banner .w90-badge {
+        background: linear-gradient(180deg, #2563EB, #1D4ED8);
+        color: #FFFFFF !important;
+        font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em;
+        padding: 8px 16px; border-radius: 20px;
+        box-shadow: 0 2px 8px rgba(37,99,235,0.4);
+        white-space: nowrap;
+    }
+
+    .w90-profile-card {
+        background: #1E293B; border: 1px solid #334155; border-radius: 10px;
+        padding: 14px 16px; margin-bottom: 4px;
+    }
+    .w90-profile-card .w90-name { font-size: 14.5px; font-weight: 700; color: #FFFFFF !important; }
+    .w90-profile-card .w90-role { font-size: 11.5px; color: #94A3B8 !important; letter-spacing: 0.04em; text-transform: uppercase; }
+
+    .w90-metric-stack {
+        font-family: 'Inter', monospace; font-size: 12.5px; font-weight: 600;
+        letter-spacing: 0.03em; color: var(--text-secondary) !important;
+        background: #F1F5F9; border: 1px solid var(--border); border-radius: 6px;
+        padding: 6px 12px; display: inline-block; margin-top: 6px;
+    }
+
+    .w90-guide-box {
+        background: var(--guide-bg); border-left: 4px solid var(--accent);
+        border-radius: 8px; padding: 16px 18px;
+    }
+    .w90-guide-box h4 { margin-top: 0 !important; color: #1E3A8A !important; font-size: 15px !important; }
+    .w90-guide-item { font-size: 13.5px; color: #1E3A8A !important; margin-bottom: 8px; padding-left: 6px; border-left: 2px solid #BFDBFE; }
+    .w90-guide-item b { color: #1E3A8A !important; }
 
     .pte-badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
     .pte-badge.great { background: var(--success-bg); color: var(--success) !important; }
@@ -85,8 +163,8 @@ st.markdown(
 
     .pte-corrected-box { background: #FAFAFA; border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; font-size: 14px; line-height: 1.7; color: var(--text) !important; }
     .pte-tip { background: #F8FAFC; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 4px; padding: 8px 12px; margin-bottom: 6px; font-size: 13.5px; color: var(--text) !important; }
-    .pte-streak { background: var(--sidebar-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; text-align: center; }
-    .pte-streak .n { font-size: 22px; font-weight: 700; color: var(--text) !important; }
+    .pte-streak { background: #1E293B; border: 1px solid #334155; border-radius: 8px; padding: 10px 14px; text-align: center; }
+    .pte-streak .n { font-size: 22px; font-weight: 700; color: #FFFFFF !important; }
 
     .pte-score-box { text-align: center; padding: 18px 0 6px; }
     .pte-score-box .num { font-size: 48px; font-weight: 700; color: var(--text) !important; line-height: 1; }
@@ -96,6 +174,22 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+def render_top_banner():
+    st.markdown(
+        f"""
+        <div class="w90-banner">
+            <div>
+                <p class="w90-title">{APP_NAME}</p>
+                <p class="w90-tag">{APP_TAGLINE}</p>
+            </div>
+            <div class="w90-badge">AIMING FOR 90/90</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 
 def esc(s: str) -> str:
@@ -126,6 +220,41 @@ Additionally provide:
 
 Respond with ONLY raw JSON, no markdown fences, no preamble, in this exact shape:
 {"overall": number, "criteria": {<criteria keys>}, "content_summary": "...", "examiner_summary": "...", "sentence_errors": [{"index": 0, "corrected": "...", "explanation": "..."}], "corrected_response": "...", "tips": ["...", "..."]}"""
+
+# ---------------------------------------------------------------------------
+# Built-in practice question bank.
+#
+# IMPORTANT HONESTY NOTE: Pearson does not publish an official public bank of
+# PTE exam questions — the real exam pool is confidential and rotates. These
+# are original practice prompts/passages written to match the common topic
+# areas and format of the real Essay and Summarize Written Text tasks, not
+# reproductions of actual exam content. They exist so you can start practicing
+# immediately without needing to paste your own material.
+# ---------------------------------------------------------------------------
+ESSAY_QUESTIONS = [
+    "Some people believe that technology has made our lives more complicated, while others think it has simplified daily life. Discuss both views and give your own opinion.",
+    "In many countries, the gap between the rich and the poor is increasing. What are the causes of this trend, and what measures can be taken to address it?",
+    "Some people think that governments should invest more in public transportation rather than building new roads. To what extent do you agree or disagree?",
+    "Many universities now offer online degrees alongside traditional campus-based programs. Do the benefits of online education outweigh the drawbacks?",
+    "Some argue that social media has strengthened human relationships, while others believe it has made people more isolated. Discuss both sides and give your opinion.",
+    "As cities grow, urban green spaces are often reduced to make way for housing and infrastructure. Should governments prioritize green spaces over development?",
+    "Some people believe that employees should be allowed to work from home permanently, while others think office attendance is essential for productivity. Discuss both views and give your opinion.",
+    "Many people believe that success is primarily determined by hard work, while others argue that natural talent plays a bigger role. Discuss both views and give your own opinion.",
+    "Some argue that international tourism benefits local economies, while others believe it damages local culture and the environment. Discuss both views and give your opinion.",
+    "In several countries, schools are reducing the amount of homework given to students. Do you think this is a positive or negative development?",
+]
+
+SWT_PASSAGES = [
+    "Renewable energy sources such as solar and wind power have grown rapidly over the past decade, driven by falling technology costs and increasing government support. Unlike fossil fuels, these sources produce little to no greenhouse gas emissions during operation, making them central to global efforts to combat climate change. However, their reliance on weather conditions creates challenges for maintaining a stable electricity supply, prompting significant investment in battery storage and smart grid technologies. Many energy analysts now predict that renewables will overtake coal and gas as the dominant source of global electricity generation within the next two decades, provided that storage costs continue to decline at their current pace.",
+    "Remote work, once a rare arrangement limited mainly to freelancers, became mainstream during the global disruptions of the early 2020s and has remained widespread ever since. Proponents argue that it increases employee flexibility, reduces commuting time, and can improve productivity for tasks requiring deep concentration. Critics, however, point to challenges in maintaining team cohesion, onboarding new employees, and separating work from personal life. As a result, many organizations have adopted hybrid models that combine in-office collaboration with remote flexibility, attempting to capture the benefits of both approaches while minimizing their respective drawbacks.",
+    "Urban planners increasingly recognize that poorly designed cities contribute to problems ranging from traffic congestion to social isolation. Compact, walkable neighborhoods with mixed residential and commercial zoning tend to reduce reliance on private vehicles, lower emissions, and foster stronger community interaction. In contrast, sprawling suburban developments often require long commutes and limit spontaneous social contact between residents. Several cities have begun redesigning neighborhoods around this principle, incorporating wider footpaths, dedicated cycling lanes, and public spaces intended to encourage walking and casual interaction rather than car dependency.",
+    "The rapid advancement of artificial intelligence has raised significant ethical questions about accountability, bias, and transparency. Because many AI systems learn from historical data, they can inadvertently reproduce or amplify existing societal biases, particularly in areas such as hiring, lending, and law enforcement. Researchers and policymakers are now exploring frameworks for auditing algorithms before deployment and requiring companies to disclose how automated decisions are made. Some experts argue that without such oversight, the benefits of AI could be undermined by a loss of public trust and an increase in unintended discriminatory outcomes.",
+    "Biodiversity loss has accelerated markedly over the past century, driven primarily by habitat destruction, pollution, and climate change. Scientists warn that the current rate of species extinction is significantly higher than the natural background rate observed throughout most of Earth's history. Conservation efforts, including protected reserves and species reintroduction programs, have shown localized success, but many experts argue that addressing the root causes, particularly deforestation and unsustainable agriculture, is essential for any long-term recovery. International cooperation remains difficult, as conservation priorities often conflict with short-term economic development goals in many regions.",
+    "Sleep researchers have found that chronic sleep deprivation is associated with a wide range of negative health outcomes, including impaired memory, weakened immune function, and increased risk of cardiovascular disease. Despite this evidence, modern lifestyles characterized by long working hours, late-night screen use, and irregular schedules continue to erode average sleep duration in many industrialized countries. Some employers have begun experimenting with flexible start times and nap facilities in response to growing awareness of sleep's role in productivity and wellbeing, though such initiatives remain far from universal across industries.",
+    "Financial literacy, the ability to understand and effectively use various financial skills such as budgeting and investing, remains uneven across populations despite its growing importance in an increasingly complex economic environment. Studies have shown that individuals with stronger financial literacy tend to save more, carry less high-interest debt, and plan more effectively for retirement. In response, some education systems have begun incorporating personal finance education into secondary school curricula, though critics argue that such programs are often too brief or theoretical to meaningfully change long-term financial behavior.",
+    "Space exploration has entered a new era characterized by increasing involvement from private companies alongside traditional government space agencies. This shift has substantially reduced the cost of launching satellites and cargo, enabling more frequent missions and opening possibilities for commercial activities such as space tourism and asteroid mining. Critics caution that the growing number of private launches raises concerns about space debris and regulatory oversight, as no single international body currently has comprehensive authority over commercial space activity. Proponents counter that competition among private firms has accelerated innovation at a pace government agencies alone could not match.",
+]
+
 
 TASK_CONFIGS = {
     "essay": {
@@ -585,7 +714,7 @@ conn = get_db()
 
 healthy, health_error = db_healthy(conn)
 if not healthy:
-    st.title("PTE Practice Studio")
+    render_top_banner()
     st.error(
         "Can't reach the database. Common causes: the Supabase tables haven't been "
         "created yet, Row Level Security is blocking access, or SUPABASE_URL in your "
@@ -609,7 +738,7 @@ if not st.session_state["user"]:
             st.session_state["session_token"] = token
 
 if not st.session_state["user"]:
-    st.title("PTE Practice Studio")
+    render_top_banner()
     st.caption("Log in or create a free account to save your work and track your score history over time.")
     tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
 
@@ -666,7 +795,15 @@ DAILY_LIMIT = int(st.secrets.get("DAILY_LIMIT", 20))
 secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
 
 with st.sidebar:
-    st.write(f"Logged in as **{st.session_state['user']}**")
+    st.markdown(
+        f"""
+        <div class="w90-profile-card">
+            <div class="w90-name">{esc(st.session_state['user'])}</div>
+            <div class="w90-role">WRITE90 CANDIDATE</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     if st.button("Log out"):
         token = st.session_state.get("session_token")
         if token:
@@ -681,7 +818,7 @@ with st.sidebar:
 
     usage_today = get_usage_count(conn, st.session_state["user"])
     st.markdown("---")
-    st.caption(f"Responses graded today: **{usage_today} / {DAILY_LIMIT}**")
+    st.caption(f"DAILY DIAGNOSTIC EVALUATIONS: {usage_today} / {DAILY_LIMIT}")
     st.progress(min(1.0, usage_today / DAILY_LIMIT if DAILY_LIMIT else 0))
 
     all_hist = get_all_history(conn, st.session_state["user"])
@@ -696,8 +833,8 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Main layout
 # ---------------------------------------------------------------------------
-st.title("PTE Practice Studio")
-st.caption("Examiner-style scoring against the official Pearson rubric, powered by Claude.")
+render_top_banner()
+
 
 task_tab_labels = [cfg["label"] for cfg in TASK_CONFIGS.values()]
 main_tabs = st.tabs(task_tab_labels + ["My Progress"])
@@ -709,43 +846,77 @@ for tab, task_key in zip(main_tabs[:-1], TASK_CONFIGS.keys()):
 
         with sub_new:
             left, right = st.columns([1.3, 1])
+
             with left:
-                context_text = st.text_area(cfg["context_label"], height=140,
+                # Built-in question bank — essay and SWT only, so users don't
+                # need to supply their own prompt/passage to start practicing.
+                if task_key in ("essay", "swt"):
+                    bank = ESSAY_QUESTIONS if task_key == "essay" else SWT_PASSAGES
+                    labels = ["Write your own..."] + [f"Q{i+1}: {q[:65]}..." for i, q in enumerate(bank)]
+                    bank_col1, bank_col2, bank_col3 = st.columns([3, 1, 1])
+                    with bank_col1:
+                        choice = st.selectbox("Practice question bank", labels, key=f"bankchoice_{task_key}")
+                    with bank_col2:
+                        st.write("")
+                        use_clicked = st.button("Use", key=f"usebank_{task_key}")
+                    with bank_col3:
+                        st.write("")
+                        if st.button("Random", key=f"random_{task_key}"):
+                            st.session_state[f"ctx_{task_key}"] = random.choice(bank)
+                            st.rerun()
+                    if use_clicked and choice != "Write your own...":
+                        idx = labels.index(choice) - 1
+                        st.session_state[f"ctx_{task_key}"] = bank[idx]
+                        st.rerun()
+
+                context_text = st.text_area(cfg["context_label"], height=110,
                                              placeholder=cfg["context_placeholder"], key=f"ctx_{task_key}")
                 if task_key == "sst" and context_text.strip():
                     tts_button(context_text, key=task_key)
                 response_text = st.text_area(cfg["response_label"], height=220,
                                               placeholder=cfg["response_placeholder"], key=f"resp_{task_key}")
                 wc = word_count(response_text)
+                char_count = len(response_text)
                 lo, hi = cfg["word_range"]
                 wc_color = "green" if lo <= wc <= hi else ("orange" if wc else "gray")
-                st.markdown(f":{wc_color}[**{wc} words**] · {cfg['word_hint']}")
-                submit = st.button("Mark my response", type="primary", key=f"submit_{task_key}",
+                st.markdown(
+                    f'<div class="w90-metric-stack">METRIC STACK: {wc} WORDS | CHARACTER BLOCKS: {char_count}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(cfg["word_hint"])
+                submit = st.button("Mark My Response Against Rubric", type="primary", key=f"submit_{task_key}",
                                     disabled=not response_text.strip())
 
             with right:
-                if not response_text.strip():
-                    st.info(f"Write your response on the left, then click **Mark my response**.")
-                elif submit:
-                    if not api_key:
-                        st.error("Enter your Anthropic API key in the sidebar first.")
-                    elif get_usage_count(conn, st.session_state["user"]) >= DAILY_LIMIT:
-                        st.error(f"Daily limit of {DAILY_LIMIT} responses reached. Please try again tomorrow.")
-                    else:
-                        with st.spinner("Marking carefully against the official rubric… this can take a little while."):
-                            try:
-                                result = call_claude(api_key, task_key, context_text, response_text, wc)
-                                bump_usage_count(conn, st.session_state["user"])
-                                save_submission(conn, st.session_state["user"], task_key, context_text, response_text, result)
-                                render_result(result, task_key)
-                            except GradingError as e:
-                                st.error("The examiner's response didn't come back in a readable format. Please try again.")
-                                with st.expander("Technical details"):
-                                    st.code(e.raw_text[-2000:] if e.raw_text else str(e))
-                            except Exception as e:
-                                st.error(f"Something went wrong marking your response: {e}")
+                guide_html = f'<div class="w90-guide-box"><h4>Verification Guide</h4>'
+                for key, name, max_score in cfg["criteria"]:
+                    guide_html += f'<div class="w90-guide-item"><b>{esc(name)}</b> — up to {max_score} pts</div>'
+                guide_html += "</div>"
+                st.markdown(guide_html, unsafe_allow_html=True)
+
+            st.markdown("---")
+            if not response_text.strip():
+                st.info("Write your response above, then click **Mark My Response Against Rubric**.")
+            elif submit:
+                if not api_key:
+                    st.error("Enter your Anthropic API key in the sidebar first.")
+                elif get_usage_count(conn, st.session_state["user"]) >= DAILY_LIMIT:
+                    st.error(f"Daily limit of {DAILY_LIMIT} responses reached. Please try again tomorrow.")
                 else:
-                    st.info("Click **Mark my response** to get your score.")
+                    with st.spinner("Marking carefully against the official rubric… this can take a little while."):
+                        try:
+                            result = call_claude(api_key, task_key, context_text, response_text, wc)
+                            bump_usage_count(conn, st.session_state["user"])
+                            save_submission(conn, st.session_state["user"], task_key, context_text, response_text, result)
+                            render_result(result, task_key)
+                        except GradingError as e:
+                            st.error("The examiner's response didn't come back in a readable format. Please try again.")
+                            with st.expander("Technical details"):
+                                st.code(e.raw_text[-2000:] if e.raw_text else str(e))
+                        except Exception as e:
+                            st.error(f"Something went wrong marking your response: {e}")
+            else:
+                st.info("Click **Mark My Response Against Rubric** to get your score.")
 
         with sub_history:
             history = get_history(conn, st.session_state["user"], task_key)
