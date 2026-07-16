@@ -249,7 +249,7 @@ def get_db():
         """CREATE TABLE IF NOT EXISTS submissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
-            task_key TEXT NOT NULL,
+            task_key TEXT NOT NULL DEFAULT 'essay',
             created_at TEXT NOT NULL,
             context_text TEXT,
             response_text TEXT,
@@ -266,7 +266,41 @@ def get_db():
         )"""
     )
     conn.commit()
+    _migrate_submissions_schema(conn)
     return conn
+
+
+def _migrate_submissions_schema(conn):
+    """Upgrades a submissions table created by an older version of this app
+    (which had 'prompt'/'essay' columns instead of 'task_key'/'context_text'/
+    'response_text') so existing deployments don't crash after an update."""
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(submissions)").fetchall()}
+
+    new_cols = {
+        "task_key": "ALTER TABLE submissions ADD COLUMN task_key TEXT DEFAULT 'essay'",
+        "context_text": "ALTER TABLE submissions ADD COLUMN context_text TEXT",
+        "response_text": "ALTER TABLE submissions ADD COLUMN response_text TEXT",
+    }
+    for col, ddl in new_cols.items():
+        if col not in existing_cols:
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
+
+    conn.commit()
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(submissions)").fetchall()}
+
+    # Backfill from the old column names if this was an old-schema database.
+    if "prompt" in existing_cols and "essay" in existing_cols:
+        conn.execute(
+            "UPDATE submissions SET context_text = prompt WHERE context_text IS NULL AND prompt IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE submissions SET response_text = essay WHERE response_text IS NULL AND essay IS NOT NULL"
+        )
+    conn.execute("UPDATE submissions SET task_key = 'essay' WHERE task_key IS NULL")
+    conn.commit()
 
 
 def hash_pw(password: str) -> str:
