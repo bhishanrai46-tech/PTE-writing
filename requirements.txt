@@ -1,2 +1,6 @@
 streamlit>=1.35
 anthropic>=0.34
+supabase>=2.4
+altair>=5.0
+pandas>=2.0
+ 
