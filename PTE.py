@@ -279,6 +279,8 @@ TASK_CONFIGS = {
         "response_placeholder": "Write or paste your 200–300 word essay here...",
         "word_range": (200, 300),
         "word_hint": "Aim for 200–300 words.",
+        "time_limit_min": 20,
+        "context_height": 110,
         "criteria": [
             ("content", "Content", 6),
             ("form", "Form", 2),
