@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import secrets
 from datetime import date, datetime
 
 import streamlit as st
@@ -226,6 +227,17 @@ def get_db():
     return create_client(url, key)
 
 
+def db_healthy(conn):
+    """Runs a harmless read against the users table so we can fail with a
+    clear, actionable message instead of an uncaught crash deep inside some
+    other function (e.g. if Supabase's Row Level Security is blocking access)."""
+    try:
+        conn.table("users").select("username").limit(1).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
 def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
@@ -239,9 +251,34 @@ def create_user(conn, username: str, password: str) -> bool:
 
 
 def verify_user(conn, username: str, password: str) -> bool:
-    res = conn.table("users").select("password_hash").eq("username", username).execute()
+    try:
+        res = conn.table("users").select("password_hash").eq("username", username).execute()
+    except Exception:
+        return False
     rows = res.data or []
     return bool(rows) and rows[0]["password_hash"] == hash_pw(password)
+
+
+def create_session(conn, username: str) -> str:
+    token = secrets.token_urlsafe(32)
+    conn.table("sessions").insert({"token": token, "username": username}).execute()
+    return token
+
+
+def get_session_user(conn, token: str):
+    try:
+        res = conn.table("sessions").select("username").eq("token", token).execute()
+        rows = res.data or []
+        return rows[0]["username"] if rows else None
+    except Exception:
+        return None
+
+
+def delete_session(conn, token: str):
+    try:
+        conn.table("sessions").delete().eq("token", token).execute()
+    except Exception:
+        pass
 
 
 def save_submission(conn, username: str, task_key: str, context_text: str, response_text: str, result: dict):
@@ -532,8 +569,28 @@ def render_result(result: dict, task_key: str):
 # ---------------------------------------------------------------------------
 conn = get_db()
 
+healthy, health_error = db_healthy(conn)
+if not healthy:
+    st.title("PTE Practice Studio")
+    st.error(
+        "Can't reach the database. This is almost always one of: the Supabase tables "
+        "haven't been created yet, or Row Level Security is blocking access."
+    )
+    with st.expander("Technical details"):
+        st.code(health_error or "Unknown error")
+    st.stop()
+
 if "user" not in st.session_state:
     st.session_state["user"] = None
+
+# Restore login after a page refresh using a session token stored in the URL.
+if not st.session_state["user"]:
+    token = st.query_params.get("t")
+    if token:
+        restored_user = get_session_user(conn, token)
+        if restored_user:
+            st.session_state["user"] = restored_user
+            st.session_state["session_token"] = token
 
 if not st.session_state["user"]:
     st.title("PTE Practice Studio")
@@ -544,9 +601,22 @@ if not st.session_state["user"]:
         lu = st.text_input("Username", key="login_user")
         lp = st.text_input("Password", type="password", key="login_pass")
         if st.button("Log in"):
-            if verify_user(conn, lu.strip(), lp):
+            db_error = None
+            try:
+                ok = verify_user(conn, lu.strip(), lp)
+            except Exception as e:
+                ok = False
+                db_error = str(e)
+            if ok:
+                token = create_session(conn, lu.strip())
                 st.session_state["user"] = lu.strip()
+                st.session_state["session_token"] = token
+                st.query_params["t"] = token
                 st.rerun()
+            elif db_error:
+                st.error("Could not reach the database.")
+                with st.expander("Technical details"):
+                    st.code(db_error)
             else:
                 st.error("Incorrect username or password.")
 
@@ -557,7 +627,10 @@ if not st.session_state["user"]:
             if not su.strip() or not sp:
                 st.error("Enter a username and password.")
             elif create_user(conn, su.strip(), sp):
+                token = create_session(conn, su.strip())
                 st.session_state["user"] = su.strip()
+                st.session_state["session_token"] = token
+                st.query_params["t"] = token
                 st.rerun()
             else:
                 st.error("That username is already taken.")
@@ -573,7 +646,13 @@ secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
 with st.sidebar:
     st.write(f"Logged in as **{st.session_state['user']}**")
     if st.button("Log out"):
+        token = st.session_state.get("session_token")
+        if token:
+            delete_session(conn, token)
         st.session_state["user"] = None
+        st.session_state.pop("session_token", None)
+        if "t" in st.query_params:
+            del st.query_params["t"]
         st.rerun()
 
     api_key = secret_key if secret_key else st.text_input("Anthropic API key", type="password")
