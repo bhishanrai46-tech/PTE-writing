@@ -1,8 +1,12 @@
 import json
 import re
+from datetime import date
+from pathlib import Path
 
 import streamlit as st
 import anthropic
+
+USAGE_FILE = Path("usage_log.json")
 
 st.set_page_config(page_title="PTE Essay Marker — Get to 90", page_icon="✏️", layout="wide")
 
@@ -56,6 +60,52 @@ def word_count(text: str) -> int:
     return len(text.split())
 
 
+def read_usage() -> dict:
+    today = str(date.today())
+    if USAGE_FILE.exists():
+        try:
+            data = json.loads(USAGE_FILE.read_text())
+        except Exception:
+            data = {}
+    else:
+        data = {}
+    if data.get("date") != today:
+        data = {"date": today, "count": 0}
+    return data
+
+
+def bump_usage() -> int:
+    data = read_usage()
+    data["count"] = data.get("count", 0) + 1
+    USAGE_FILE.write_text(json.dumps(data))
+    return data["count"]
+
+
+def check_password() -> bool:
+    """Returns True if the visitor is allowed through. Shows a login box if a
+    password is configured in secrets; if no APP_PASSWORD secret is set, the
+    gate is skipped entirely (useful for local testing)."""
+    app_password = st.secrets.get("APP_PASSWORD", "")
+    if not app_password:
+        return True
+    if st.session_state.get("authed"):
+        return True
+
+    st.title("✏️ PTE Essay Marker")
+    entered = st.text_input("Enter access password", type="password")
+    if st.button("Enter"):
+        if entered == app_password:
+            st.session_state["authed"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    return False
+
+
+if not check_password():
+    st.stop()
+
+
 def call_claude(api_key: str, prompt: str, essay: str, words: int) -> dict:
     client = anthropic.Anthropic(api_key=api_key)
     user_msg = (f"Essay prompt: {prompt}\n\n" if prompt.strip() else "") + f"Essay ({words} words):\n{essay}"
@@ -104,19 +154,31 @@ def render_result(result: dict):
 
 
 # ---------------------------------------------------------------------------
-# Sidebar — API key
+# Sidebar — API key + usage limit status
 # ---------------------------------------------------------------------------
+DAILY_LIMIT = int(st.secrets.get("DAILY_LIMIT", 20))
+
 with st.sidebar:
     st.header("Setup")
-    api_key = st.text_input(
-        "Anthropic API key",
-        type="password",
-        help="Get one at console.anthropic.com. Stored only for this session, never saved to disk.",
-    )
-    st.caption(
-        "This app calls the Claude API directly from your machine/session. "
-        "Your key is not sent anywhere except api.anthropic.com."
-    )
+    secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+    if secret_key:
+        api_key = secret_key
+        st.success("API key loaded from app secrets.")
+    else:
+        api_key = st.text_input(
+            "Anthropic API key",
+            type="password",
+            help="Get one at console.anthropic.com. Stored only for this session, never saved to disk.",
+        )
+        st.caption(
+            "This app calls the Claude API directly from your machine/session. "
+            "Your key is not sent anywhere except api.anthropic.com."
+        )
+
+    usage_today = read_usage().get("count", 0)
+    st.markdown("---")
+    st.caption(f"Essays graded today: **{usage_today} / {DAILY_LIMIT}**")
+    st.progress(min(1.0, usage_today / DAILY_LIMIT if DAILY_LIMIT else 0))
 
 # ---------------------------------------------------------------------------
 # Main layout
@@ -142,10 +204,15 @@ with right:
     elif submit:
         if not api_key:
             st.error("Enter your Anthropic API key in the sidebar first.")
+        elif read_usage().get("count", 0) >= DAILY_LIMIT:
+            st.error(
+                f"Daily limit of {DAILY_LIMIT} essays reached. Please try again tomorrow."
+            )
         else:
             with st.spinner("Marking your script…"):
                 try:
                     result = call_claude(api_key, prompt, essay, wc)
+                    bump_usage()
                     render_result(result)
                 except Exception as e:
                     st.error(f"Something went wrong marking your essay: {e}")
