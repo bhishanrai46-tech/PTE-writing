@@ -914,6 +914,65 @@ def render_timer(minutes: int, key: str, auto_start: bool = False):
     )
 
 
+def render_live_word_counter(counter_key: str, textarea_label: str, lo: int, hi: int, initial_text: str = ""):
+    """Renders a metric-stack box that updates on every keystroke, instead of
+    only after a Streamlit rerun (which for st.text_area normally only fires
+    once the field loses focus). This works by reaching into the parent page,
+    finding the actual <textarea> Streamlit rendered for this widget (matched
+    by its accessible label), and listening to its native 'input' event —
+    completely independent of Streamlit's own rerun cycle."""
+    initial_words = word_count(initial_text)
+    initial_chars = len(initial_text)
+    safe_label = json.dumps(textarea_label)
+    box_id = f"w90-livecount-{counter_key}"
+    st.markdown(
+        f'<div id="{box_id}" class="w90-metric-stack">'
+        f'METRIC STACK: {initial_words} WORDS | CHARACTER BLOCKS: {initial_chars}</div>',
+        unsafe_allow_html=True,
+    )
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const label_{counter_key} = {safe_label};
+            const lo_{counter_key} = {lo};
+            const hi_{counter_key} = {hi};
+            const boxId_{counter_key} = {json.dumps(box_id)};
+
+            function render(textarea) {{
+                const doc = window.parent.document;
+                const box = doc.getElementById(boxId_{counter_key});
+                if (!box) return;
+                const val = textarea.value || "";
+                const trimmed = val.trim();
+                const words = trimmed.length ? trimmed.split(/\\s+/).length : 0;
+                const chars = val.length;
+                const inRange = words > 0 && words >= lo_{counter_key} && words <= hi_{counter_key};
+                box.textContent = 'METRIC STACK: ' + words + ' WORDS | CHARACTER BLOCKS: ' + chars;
+                box.style.color = words === 0 ? '#475569' : (inRange ? '#15803D' : '#B45309');
+                box.style.borderColor = words === 0 ? '#E2E8F0' : (inRange ? '#15803D' : '#B45309');
+            }}
+
+            function attach() {{
+                const doc = window.parent.document;
+                const textarea = doc.querySelector('textarea[aria-label="' + label_{counter_key} + '"]');
+                if (!textarea) {{ setTimeout(attach, 150); return; }}
+                if (textarea.__write90WcHandler) {{
+                    textarea.removeEventListener('input', textarea.__write90WcHandler);
+                }}
+                const handler = function() {{ render(textarea); }};
+                textarea.__write90WcHandler = handler;
+                textarea.addEventListener('input', handler);
+                render(textarea);
+            }}
+            attach();
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
 def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
     safe_text = json.dumps(text)
     safe_label = json.dumps(button_label)
@@ -929,24 +988,35 @@ def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
             const text_{key} = {safe_text};
             document.getElementById('playBtn_{key}').textContent = {safe_label};
 
+            // Split into sentences so each one is spoken as its own utterance.
+            // Long single utterances tend to sound flatter and more monotone;
+            // short chained utterances let the engine reset intonation at
+            // each sentence boundary, which reads as noticeably more natural.
+            const sentences_{key} = text_{key}.match(/[^.!?]+[.!?]*/g) || [text_{key}];
+
             // Pick the most natural-sounding English voice available in the
-            // browser instead of whatever default the OS falls back to
-            // (which is usually the flat, robotic-sounding one).
+            // browser instead of whatever default the OS falls back to.
             function pickVoice() {{
                 const voices = window.speechSynthesis.getVoices() || [];
                 if (!voices.length) return null;
                 const preferredNames = [
-                    "Google US English", "Google UK English Female",
                     "Microsoft Aria Online (Natural) - English (United States)",
                     "Microsoft Ava Online (Natural) - English (United States)",
+                    "Microsoft Emma Online (Natural) - English (United States)",
                     "Microsoft Guy Online (Natural) - English (United States)",
-                    "Samantha", "Alex", "Karen", "Daniel"
+                    "Google US English", "Google UK English Female", "Google UK English Male",
+                    "Samantha", "Karen", "Daniel", "Alex"
                 ];
                 for (const name of preferredNames) {{
                     const v = voices.find(v => v.name === name);
                     if (v) return v;
                 }}
-                let v = voices.find(v => /Natural|Neural/i.test(v.name) && /^en/i.test(v.lang));
+                // Voices flagged localService:false are almost always cloud/
+                // network voices (Google, Microsoft Natural, etc.) which sound
+                // dramatically less robotic than the offline OS default.
+                let v = voices.find(v => v.localService === false && /^en/i.test(v.lang));
+                if (v) return v;
+                v = voices.find(v => /Natural|Neural/i.test(v.name) && /^en/i.test(v.lang));
                 if (v) return v;
                 v = voices.find(v => /Google/i.test(v.name) && /^en/i.test(v.lang));
                 if (v) return v;
@@ -956,17 +1026,28 @@ def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
                 return v || voices[0];
             }}
 
+            let playToken_{key} = 0;
+
+            function speakQueue(voice, myToken) {{
+                let i = 0;
+                function next() {{
+                    if (myToken !== playToken_{key} || i >= sentences_{key}.length) return;
+                    const u = new SpeechSynthesisUtterance(sentences_{key}[i].trim());
+                    if (voice) {{ u.voice = voice; u.lang = voice.lang; }}
+                    u.rate = 0.94;
+                    u.pitch = 1.0;
+                    u.volume = 1;
+                    u.onend = function() {{ i += 1; next(); }};
+                    window.speechSynthesis.speak(u);
+                }}
+                next();
+            }}
+
             function speak() {{
                 window.speechSynthesis.cancel();
-                const u = new SpeechSynthesisUtterance(text_{key});
+                playToken_{key} += 1;
                 const voice = pickVoice();
-                if (voice) {{ u.voice = voice; u.lang = voice.lang; }}
-                // Slightly slower than default with natural pitch reads far
-                // less "robotic" than the browser's flat default rate.
-                u.rate = 0.93;
-                u.pitch = 1.0;
-                u.volume = 1;
-                window.speechSynthesis.speak(u);
+                speakQueue(voice, playToken_{key});
             }}
 
             document.getElementById('playBtn_{key}').onclick = function() {{
@@ -979,6 +1060,7 @@ def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
                 }}
             }};
             document.getElementById('stopBtn_{key}').onclick = function() {{
+                playToken_{key} += 1;
                 window.speechSynthesis.cancel();
             }};
 
@@ -999,6 +1081,7 @@ def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
                         '[role="tab"], [data-testid="stSidebar"] button, .stButton button'
                     );
                     if (target) {{
+                        playToken_{key} += 1;
                         try {{ window.parent.speechSynthesis.cancel(); }} catch (err) {{}}
                     }}
                 }};
@@ -1277,8 +1360,8 @@ if not st.session_state["user"]:
 
 if not st.session_state["user"]:
     render_top_banner()
-    st.caption("Log in or create a free account to save your work and track your score history over time.")
-    tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
+    st.caption("New here? Create a free account to save your work and track your score history over time.")
+    tab_signup, tab_login = st.tabs(["Sign up", "Log in"])
 
     with tab_login:
         lu = st.text_input("Username", key="login_user")
@@ -1437,15 +1520,22 @@ elif current_section in TASK_CONFIGS:
             with nav_col3:
                 st.caption(f"Question {current_idx + 1} of {len(bank)}")
 
-            st.markdown(f'**{cfg["context_label"]}**')
-            st.markdown(
-                f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;'
-                f'padding:14px 16px;font-size:14px;color:#0F172A;margin-bottom:10px;'
-                f'max-height:{cfg["context_height"]}px;overflow-y:auto;">{esc(context_text)}</div>',
-                unsafe_allow_html=True,
-            )
             if task_key == "sst":
+                # Real PTE exam behavior: you LISTEN to the lecture, you never
+                # see it written out. Show only the audio control, not the
+                # transcript — the text is still used behind the scenes for
+                # grading (context_text), just never rendered on screen.
+                st.markdown(f'**{cfg["context_label"]}**')
+                st.caption("Listen carefully — the transcript is not shown, just like the real exam.")
                 tts_button(context_text, key=f"{task_key}_{current_idx}")
+            else:
+                st.markdown(f'**{cfg["context_label"]}**')
+                st.markdown(
+                    f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;'
+                    f'padding:14px 16px;font-size:14px;color:#0F172A;margin-bottom:10px;'
+                    f'max-height:{cfg["context_height"]}px;overflow-y:auto;">{esc(context_text)}</div>',
+                    unsafe_allow_html=True,
+                )
 
             response_text = st.text_area(cfg["response_label"], height=220,
                                           placeholder=cfg["response_placeholder"],
@@ -1453,10 +1543,11 @@ elif current_section in TASK_CONFIGS:
             wc = word_count(response_text)
             char_count = len(response_text)
             lo, hi = cfg["word_range"]
-            wc_color = "green" if lo <= wc <= hi else ("orange" if wc else "gray")
-            st.markdown(
-                f'<div class="w90-metric-stack">METRIC STACK: {wc} WORDS | CHARACTER BLOCKS: {char_count}</div>',
-                unsafe_allow_html=True,
+            render_live_word_counter(
+                counter_key=f"{task_key}_{current_idx}",
+                textarea_label=cfg["response_label"],
+                lo=lo, hi=hi,
+                initial_text=response_text,
             )
             st.caption(cfg["word_hint"])
             submit = st.button("Mark My Response Against Rubric", type="primary", key=f"submit_{task_key}_{current_idx}",
