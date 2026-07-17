@@ -2,7 +2,6 @@ import hashlib
 import json
 import re
 import secrets
-import random
 from datetime import date, datetime
 
 import streamlit as st
@@ -232,11 +231,12 @@ Additionally provide:
 - "content_summary": a neutral, brief summary in your own words of what the source material is about and how well the response captures it.
 - "examiner_summary": 2-3 direct, specific sentences on performance and the single biggest lever to raise the score.
 - "sentence_errors": the response will be given to you as a NUMBERED list of sentences. Return an entry ONLY for sentences with an actual error — skip correct ones entirely. Each: {"index": integer, "corrected": "...", "explanation": "..."}.
-- "corrected_response": a full rewritten version of the entire response at a 90-level standard, keeping the original ideas but fixing all errors.
+- "corrected_response": a rewritten version of the PERSON'S OWN response, keeping their original ideas/structure/argument but fixing every error to reach a 90-level standard. This must stay recognizably their essay, just corrected.
+- "model_response": a COMPLETELY INDEPENDENT, freshly composed response to the same prompt, written entirely by you as an ideal 90-scoring example. Do not base this on the person's content, ideas, or structure — write the best possible original response a top scorer would produce, meeting the exact word/sentence requirements for this task.
 - "tips": an array of 3-6 short, specific, actionable tips based on THIS response's actual recurring weaknesses.
 
 Respond with ONLY raw JSON, no markdown fences, no preamble, in this exact shape:
-{"overall": number, "criteria": {<criteria keys>}, "content_summary": "...", "examiner_summary": "...", "sentence_errors": [{"index": 0, "corrected": "...", "explanation": "..."}], "corrected_response": "...", "tips": ["...", "..."]}"""
+{"overall": number, "criteria": {<criteria keys>}, "content_summary": "...", "examiner_summary": "...", "sentence_errors": [{"index": 0, "corrected": "...", "explanation": "..."}], "corrected_response": "...", "model_response": "...", "tips": ["...", "..."]}"""
 
 # ---------------------------------------------------------------------------
 # Built-in practice question bank.
@@ -259,6 +259,16 @@ ESSAY_QUESTIONS = [
     "Many people believe that success is primarily determined by hard work, while others argue that natural talent plays a bigger role. Discuss both views and give your own opinion.",
     "Some argue that international tourism benefits local economies, while others believe it damages local culture and the environment. Discuss both views and give your opinion.",
     "In several countries, schools are reducing the amount of homework given to students. Do you think this is a positive or negative development?",
+    "Some people believe that children should begin learning a foreign language as early as possible, while others think it is better to focus on their native language first. Discuss both views and give your opinion.",
+    "Advances in artificial intelligence are expected to replace many jobs currently done by humans. Do the benefits of this technology outweigh the risks to employment?",
+    "Some believe that university education should be free for all students, while others think students should pay for their own education. Discuss both views and give your opinion.",
+    "In many workplaces, older and younger employees often have different attitudes toward work. What are the reasons for this, and how can organizations manage these differences effectively?",
+    "Some people think that celebrities have too much influence on young people's behavior and attitudes. To what extent do you agree or disagree?",
+    "Many governments are increasing taxes on unhealthy foods to reduce obesity rates. Do you think this is an effective solution?",
+    "Some argue that space exploration is a waste of money that could be better spent solving problems on Earth, while others believe it is essential for humanity's future. Discuss both views and give your opinion.",
+    "In some countries, the voting age has been lowered to 16. Do you think this is a positive change?",
+    "Some people believe that traditional classroom learning is more effective than distance learning, while others disagree. Discuss both views and give your own opinion.",
+    "Many people argue that zoos are cruel and should be banned, while others believe they play an important role in conservation and education. Discuss both views and give your opinion.",
 ]
 
 SWT_PASSAGES = [
@@ -656,7 +666,7 @@ def call_claude(api_key: str, task_key: str, context_text: str, response_text: s
     )
     response = client.messages.create(
         model="claude-sonnet-5",
-        max_tokens=4000,
+        max_tokens=5000,
         system=cfg["system_prompt"],
         messages=[{"role": "user", "content": user_msg}],
     )
@@ -765,10 +775,12 @@ def render_timer(minutes: int, key: str):
     )
 
 
-def render_timer(minutes: int, key: str):
+def render_timer(minutes: int, key: str, auto_start: bool = False):
     """A self-contained countdown timer matching the official PTE time limit
     for this task. Runs in the browser (JS), independent of Streamlit reruns,
-    so it keeps ticking while the person writes."""
+    so it keeps ticking while the person writes. If auto_start is True, it
+    begins counting down immediately on mount (e.g. as soon as the task is
+    opened), matching real exam behavior."""
     total_seconds = minutes * 60
     components.html(
         f"""
@@ -797,13 +809,14 @@ def render_timer(minutes: int, key: str):
                 else {{ clockEl.style.color = '#0F172A'; }}
                 if (remaining_{key} <= 0) {{ clockEl.textContent = "Time's up"; }}
             }}
-            document.getElementById('startBtn_{key}').onclick = function() {{
+            function startTimer() {{
                 if (interval_{key}) return;
                 interval_{key} = setInterval(function() {{
                     if (remaining_{key} > 0) {{ remaining_{key} -= 1; render(); }}
                     else {{ clearInterval(interval_{key}); interval_{key} = null; }}
                 }}, 1000);
-            }};
+            }}
+            document.getElementById('startBtn_{key}').onclick = startTimer;
             document.getElementById('pauseBtn_{key}').onclick = function() {{
                 clearInterval(interval_{key});
                 interval_{key} = null;
@@ -815,6 +828,7 @@ def render_timer(minutes: int, key: str):
                 render();
             }};
             render();
+            if ({str(auto_start).lower()}) {{ startTimer(); }}
         }})();
         </script>
         """,
@@ -893,7 +907,13 @@ def render_result(result: dict, task_key: str):
 
     st.markdown("---")
     st.subheader("Corrected 90-level version")
+    st.caption("Your essay, kept as your own, with every error fixed.")
     st.markdown(f'<div class="pte-corrected-box">{esc(result.get("corrected_response",""))}</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.subheader("Model 90-score response")
+    st.caption("An independent example response written fresh for this prompt — for comparison, not a correction of yours.")
+    st.markdown(f'<div class="pte-corrected-box">{esc(result.get("model_response",""))}</div>', unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader("Tips to work on")
@@ -1024,137 +1044,155 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
+    st.markdown("---")
+    st.caption("NAVIGATE")
+    nav_options = list(TASK_CONFIGS.keys()) + ["progress"]
+    nav_labels = {**{k: v["label"] for k, v in TASK_CONFIGS.items()}, "progress": "My Progress"}
+    if "current_section" not in st.session_state:
+        st.session_state["current_section"] = "essay"
+    for opt in nav_options:
+        is_active = st.session_state["current_section"] == opt
+        if st.button(
+            nav_labels[opt],
+            key=f"nav_{opt}",
+            type="primary" if is_active else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state["current_section"] = opt
+            st.rerun()
+
 # ---------------------------------------------------------------------------
 # Main layout
 # ---------------------------------------------------------------------------
 render_top_banner()
 
+current_section = st.session_state["current_section"]
 
-task_tab_labels = [cfg["label"] for cfg in TASK_CONFIGS.values()]
-main_tabs = st.tabs(task_tab_labels + ["My Progress"])
-
-for tab, task_key in zip(main_tabs[:-1], TASK_CONFIGS.keys()):
+if current_section in TASK_CONFIGS:
+    task_key = current_section
     cfg = TASK_CONFIGS[task_key]
-    with tab:
-        sub_new, sub_history = st.tabs(["New attempt", "History"])
 
-        with sub_new:
-            left, right = st.columns([1.3, 1])
+    # Every task now draws from a built-in question bank only — no free-text
+    # prompt/passage entry. Essay has its own 20-question bank; Summarize
+    # Written Text and Summarize Spoken Text share the practice-passage bank
+    # (used as a reading passage for SWT, and as a lecture transcript for SST).
+    bank = ESSAY_QUESTIONS if task_key == "essay" else SWT_PASSAGES
 
-            with left:
-                render_timer(cfg["time_limit_min"], key=task_key)
-                st.write("")
+    idx_key = f"bank_idx_{task_key}"
+    if idx_key not in st.session_state:
+        st.session_state[idx_key] = 0
+    st.session_state[idx_key] %= len(bank)
+    current_idx = st.session_state[idx_key]
+    context_text = bank[current_idx]
 
-                # Built-in question bank — essay and SWT only, so users don't
-                # need to supply their own prompt/passage to start practicing.
-                if task_key in ("essay", "swt"):
-                    bank = ESSAY_QUESTIONS if task_key == "essay" else SWT_PASSAGES
-                    labels = ["Write your own..."] + [f"Q{i+1}: {q[:65]}..." for i, q in enumerate(bank)]
-                    bank_col1, bank_col2, bank_col3 = st.columns([3, 1, 1])
-                    with bank_col1:
-                        choice = st.selectbox("Practice question bank", labels, key=f"bankchoice_{task_key}")
-                    with bank_col2:
-                        st.write("")
-                        use_clicked = st.button("Use", key=f"usebank_{task_key}")
-                    with bank_col3:
-                        st.write("")
-                        if st.button("Random", key=f"random_{task_key}"):
-                            st.session_state[f"ctx_{task_key}"] = random.choice(bank)
-                            st.rerun()
+    sub_new, sub_history = st.tabs(["New attempt", "History"])
 
-                    # Show the FULL, untruncated question text before inserting —
-                    # the dropdown label itself is shortened for readability.
-                    if choice != "Write your own...":
-                        idx = labels.index(choice) - 1
-                        st.caption("Full question:")
-                        st.markdown(
-                            f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;'
-                            f'padding:10px 12px;font-size:13.5px;color:#0F172A;margin-bottom:8px;">{esc(bank[idx])}</div>',
-                            unsafe_allow_html=True,
-                        )
+    with sub_new:
+        left, right = st.columns([1.3, 1])
 
-                    if use_clicked and choice != "Write your own...":
-                        idx = labels.index(choice) - 1
-                        st.session_state[f"ctx_{task_key}"] = bank[idx]
-                        st.rerun()
+        with left:
+            # Timer key includes the question index so it resets fresh for
+            # each new question, and auto-starts the moment this task/question
+            # is opened — matching real exam behavior.
+            render_timer(cfg["time_limit_min"], key=f"{task_key}_{current_idx}", auto_start=True)
+            st.write("")
 
-                context_text = st.text_area(cfg["context_label"], height=cfg["context_height"],
-                                             placeholder=cfg["context_placeholder"], key=f"ctx_{task_key}")
-                if task_key == "sst" and context_text.strip():
-                    tts_button(context_text, key=task_key)
-                response_text = st.text_area(cfg["response_label"], height=220,
-                                              placeholder=cfg["response_placeholder"], key=f"resp_{task_key}")
-                wc = word_count(response_text)
-                char_count = len(response_text)
-                lo, hi = cfg["word_range"]
-                wc_color = "green" if lo <= wc <= hi else ("orange" if wc else "gray")
-                st.markdown(
-                    f'<div class="w90-metric-stack">METRIC STACK: {wc} WORDS | CHARACTER BLOCKS: {char_count}</div>',
-                    unsafe_allow_html=True,
-                )
-                st.caption(cfg["word_hint"])
-                submit = st.button("Mark My Response Against Rubric", type="primary", key=f"submit_{task_key}",
-                                    disabled=not response_text.strip())
+            nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 3])
+            with nav_col1:
+                if st.button("Previous", key=f"prev_{task_key}", use_container_width=True):
+                    st.session_state[idx_key] = (current_idx - 1) % len(bank)
+                    st.rerun()
+            with nav_col2:
+                if st.button("Next", key=f"next_{task_key}", use_container_width=True):
+                    st.session_state[idx_key] = (current_idx + 1) % len(bank)
+                    st.rerun()
+            with nav_col3:
+                st.caption(f"Question {current_idx + 1} of {len(bank)}")
 
-            with right:
-                total_max = sum(m for _, _, m in cfg["criteria"])
-                guide_html = f'<div class="w90-guide-box"><h4>Verification Guide</h4>'
-                for key, name, max_score in cfg["criteria"]:
-                    guide_html += f'<div class="w90-guide-item"><b>{esc(name)}</b> — up to {max_score} pts</div>'
-                guide_html += (
-                    f'<div style="font-size:11.5px;color:#1E3A8A;margin-top:10px;padding-top:8px;'
-                    f'border-top:1px solid #BFDBFE;">Trait names and point scale (raw total: {total_max}) '
-                    f'match Pearson\'s official PTE Academic Score Guide.</div>'
-                )
-                guide_html += "</div>"
-                st.markdown(guide_html, unsafe_allow_html=True)
+            st.markdown(f'**{cfg["context_label"]}**')
+            st.markdown(
+                f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;'
+                f'padding:14px 16px;font-size:14px;color:#0F172A;margin-bottom:10px;'
+                f'max-height:{cfg["context_height"]}px;overflow-y:auto;">{esc(context_text)}</div>',
+                unsafe_allow_html=True,
+            )
+            if task_key == "sst":
+                tts_button(context_text, key=f"{task_key}_{current_idx}")
 
-            st.markdown("---")
-            if not response_text.strip():
-                st.info("Write your response above, then click **Mark My Response Against Rubric**.")
-            elif submit:
-                if not api_key:
-                    st.error("Enter your Anthropic API key in the sidebar first.")
-                elif get_usage_count(conn, st.session_state["user"]) >= DAILY_LIMIT:
-                    st.error(f"Daily limit of {DAILY_LIMIT} responses reached. Please try again tomorrow.")
-                else:
-                    with st.spinner("Marking carefully against the official rubric… this can take a little while."):
-                        try:
-                            result = call_claude(api_key, task_key, context_text, response_text, wc)
-                            bump_usage_count(conn, st.session_state["user"])
-                            save_submission(conn, st.session_state["user"], task_key, context_text, response_text, result)
-                            render_result(result, task_key)
-                        except GradingError as e:
-                            st.error("The examiner's response didn't come back in a readable format. Please try again.")
-                            with st.expander("Technical details"):
-                                st.code(e.raw_text[-2000:] if e.raw_text else str(e))
-                        except Exception as e:
-                            st.error(f"Something went wrong marking your response: {e}")
+            response_text = st.text_area(cfg["response_label"], height=220,
+                                          placeholder=cfg["response_placeholder"],
+                                          key=f"resp_{task_key}_{current_idx}")
+            wc = word_count(response_text)
+            char_count = len(response_text)
+            lo, hi = cfg["word_range"]
+            wc_color = "green" if lo <= wc <= hi else ("orange" if wc else "gray")
+            st.markdown(
+                f'<div class="w90-metric-stack">METRIC STACK: {wc} WORDS | CHARACTER BLOCKS: {char_count}</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption(cfg["word_hint"])
+            submit = st.button("Mark My Response Against Rubric", type="primary", key=f"submit_{task_key}_{current_idx}",
+                                disabled=not response_text.strip())
+
+        with right:
+            total_max = sum(m for _, _, m in cfg["criteria"])
+            guide_html = '<div class="w90-guide-box"><h4>Verification Guide</h4>'
+            for key, name, max_score in cfg["criteria"]:
+                guide_html += f'<div class="w90-guide-item"><b>{esc(name)}</b> — up to {max_score} pts</div>'
+            guide_html += (
+                f'<div style="font-size:11.5px;color:#1E3A8A;margin-top:10px;padding-top:8px;'
+                f'border-top:1px solid #BFDBFE;">Trait names and point scale (raw total: {total_max}) '
+                f'match Pearson\'s official PTE Academic Score Guide.</div>'
+            )
+            guide_html += "</div>"
+            st.markdown(guide_html, unsafe_allow_html=True)
+
+        st.markdown("---")
+        if not response_text.strip():
+            st.info("Write your response above, then click **Mark My Response Against Rubric**.")
+        elif submit:
+            if not api_key:
+                st.error("Enter your Anthropic API key in the sidebar first.")
+            elif get_usage_count(conn, st.session_state["user"]) >= DAILY_LIMIT:
+                st.error(f"Daily limit of {DAILY_LIMIT} responses reached. Please try again tomorrow.")
             else:
-                st.info("Click **Mark My Response Against Rubric** to get your score.")
+                with st.spinner("Marking carefully against the official rubric… this can take a little while."):
+                    try:
+                        result = call_claude(api_key, task_key, context_text, response_text, wc)
+                        bump_usage_count(conn, st.session_state["user"])
+                        save_submission(conn, st.session_state["user"], task_key, context_text, response_text, result)
+                        render_result(result, task_key)
+                    except GradingError as e:
+                        st.error("The examiner's response didn't come back in a readable format. Please try again.")
+                        with st.expander("Technical details"):
+                            st.code(e.raw_text[-2000:] if e.raw_text else str(e))
+                    except Exception as e:
+                        st.error(f"Something went wrong marking your response: {e}")
+        else:
+            st.info("Click **Mark My Response Against Rubric** to get your score.")
 
-        with sub_history:
-            history = get_history(conn, st.session_state["user"], task_key)
-            if not history:
-                st.info("No attempts yet. Your history for this task will appear here.")
-            else:
-                scores = [row[3] for row in history][::-1]
-                if len(scores) > 1:
-                    fixed_score_chart(scores)
-                for created_at, hcontext, hresponse, hoverall, hresult_json in history:
-                    with st.expander(f"{created_at[:16].replace('T',' ')} — Score: {hoverall}/90"):
-                        if hcontext:
-                            st.caption(f"Source: {hcontext[:300]}{'…' if len(hcontext) > 300 else ''}")
-                        st.write(hresponse)
-                        try:
-                            render_result(json.loads(hresult_json), task_key)
-                        except Exception:
-                            st.write("(Could not load detailed breakdown for this entry.)")
+    with sub_history:
+        history = get_history(conn, st.session_state["user"], task_key)
+        if not history:
+            st.info("No attempts yet. Your history for this task will appear here.")
+        else:
+            scores = [row[3] for row in history][::-1]
+            if len(scores) > 1:
+                fixed_score_chart(scores)
+            for created_at, hcontext, hresponse, hoverall, hresult_json in history:
+                with st.expander(f"{created_at[:16].replace('T',' ')} — Score: {hoverall}/90"):
+                    if hcontext:
+                        st.caption(f"Source: {hcontext[:300]}{'…' if len(hcontext) > 300 else ''}")
+                    st.write(hresponse)
+                    try:
+                        render_result(json.loads(hresult_json), task_key)
+                    except Exception:
+                        st.write("(Could not load detailed breakdown for this entry.)")
 
-with main_tabs[-1]:
+elif current_section == "progress":
     all_hist = get_all_history(conn, st.session_state["user"])
     if not all_hist:
-        st.info("Grade a few responses across the tabs above and your overall progress will show up here.")
+        st.info("Grade a few responses across the sections in the sidebar and your overall progress will show up here.")
     else:
         total = len(all_hist)
         avg = round(sum(r[2] for r in all_hist) / total)
