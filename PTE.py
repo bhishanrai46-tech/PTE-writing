@@ -221,6 +221,77 @@ st.markdown(
 )
 
 
+def inject_sidebar_toggle():
+    """A permanent, self-built toggle button pinned to the top-left corner of
+    the screen (desktop and mobile). Streamlit's own collapse/expand control
+    has changed data-testid names across versions (collapsedControl in older
+    releases, stSidebarCollapseButton in 1.38+, etc.), so a pure-CSS fix can
+    silently stop working after a Streamlit upgrade. This button doesn't
+    guess a single name — it searches a list of known selectors for
+    Streamlit's native control and clicks it directly, with a manual
+    show/hide fallback if none are found. It only injects itself once per
+    page load, so it's safe to call on every rerun."""
+    components.html(
+        """
+        <script>
+        (function() {
+            try {
+                var doc = window.parent.document;
+                if (doc.getElementById('write90-sidebar-toggle')) return;
+
+                var btn = doc.createElement('button');
+                btn.id = 'write90-sidebar-toggle';
+                btn.innerHTML = '&#9776;';
+                btn.title = 'Show/hide menu';
+                btn.style.cssText = [
+                    'position:fixed', 'top:12px', 'left:12px', 'z-index:2147483647',
+                    'background:#2563EB', 'color:#FFFFFF', 'border:none',
+                    'border-radius:8px', 'width:38px', 'height:38px',
+                    'font-size:18px', 'line-height:1', 'cursor:pointer',
+                    'box-shadow:0 2px 8px rgba(0,0,0,0.3)', 'display:flex',
+                    'align-items:center', 'justify-content:center'
+                ].join(';');
+                doc.body.appendChild(btn);
+
+                function findNativeToggle() {
+                    var selectors = [
+                        '[data-testid="stSidebarCollapseButton"] button',
+                        '[data-testid="stSidebarCollapseButton"]',
+                        '[data-testid="collapsedControl"] button',
+                        '[data-testid="collapsedControl"]',
+                        '[data-testid="stSidebarCollapsedControl"] button',
+                        '[data-testid="stSidebarCollapsedControl"]',
+                        'header[data-testid="stHeader"] button'
+                    ];
+                    for (var i = 0; i < selectors.length; i++) {
+                        var el = doc.querySelector(selectors[i]);
+                        if (el) return el;
+                    }
+                    return null;
+                }
+
+                btn.addEventListener('click', function() {
+                    var native = findNativeToggle();
+                    if (native) {
+                        native.click();
+                        return;
+                    }
+                    // Last-resort fallback: flip the sidebar's own visibility
+                    // directly if no known native control could be found.
+                    var sidebar = doc.querySelector('[data-testid="stSidebar"]');
+                    if (sidebar) {
+                        var hidden = sidebar.style.display === 'none';
+                        sidebar.style.display = hidden ? '' : 'none';
+                    }
+                });
+            } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
 def render_top_banner():
     st.markdown(
         f"""
@@ -1176,6 +1247,8 @@ def render_dictation_section(cfg: dict, conn):
 # Auth gate
 # ---------------------------------------------------------------------------
 conn = get_db()
+
+inject_sidebar_toggle()
 
 healthy, health_error = db_healthy(conn)
 if not healthy:
