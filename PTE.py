@@ -81,8 +81,11 @@ st.markdown(
 
     /* Selectbox — the closed control */
     [data-baseweb="select"] > div { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; }
-    [data-baseweb="select"] * { color: var(--text) !important; }
+    [data-baseweb="select"] * { color: var(--text) !important; background-color: transparent !important; }
     [data-baseweb="select"] svg { fill: var(--text-secondary) !important; }
+    [data-baseweb="select"] [data-baseweb="tag"] { background-color: var(--guide-bg) !important; }
+    [data-testid="stSelectbox"] { background-color: transparent !important; }
+    [data-testid="stSelectbox"] label { color: var(--text) !important; }
 
     /* Selectbox dropdown popover — this renders in a portal attached to
        <body>, OUTSIDE the app's main container, so none of the rules above
@@ -339,6 +342,8 @@ Convert the raw total (max 26) to a scaled practice score out of 90, proportiona
         "response_placeholder": "Write ONE sentence, 5–75 words, capturing the passage's main idea...",
         "word_range": (5, 75),
         "word_hint": "Must be exactly ONE sentence, 5–75 words.",
+        "time_limit_min": 10,
+        "context_height": 220,
         "criteria": [
             ("content", "Content", 4),
             ("form", "Form", 1),
@@ -372,6 +377,8 @@ Convert the raw total (max 9) to a scaled practice score out of 90, proportional
         "response_placeholder": "Write a 50–70 word paragraph summarizing the key points of the lecture...",
         "word_range": (50, 70),
         "word_hint": "Aim for 50–70 words. Under 40 or over 100 scores zero.",
+        "time_limit_min": 10,
+        "context_height": 180,
         "criteria": [
             ("content", "Content", 4),
             ("form", "Form", 2),
@@ -691,6 +698,130 @@ def score_badge(overall: int) -> str:
     return '<span class="pte-badge push">Room to grow</span>'
 
 
+def render_timer(minutes: int, key: str):
+    total_seconds = minutes * 60
+    components.html(
+        f"""
+        <div style="font-family:Inter,sans-serif;display:flex;align-items:center;gap:14px;
+             background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:10px 16px;">
+            <div id="clock_{key}" style="font-family:monospace;font-size:22px;font-weight:700;color:#0F172A;min-width:70px;">
+                {minutes:02d}:00
+            </div>
+            <div style="font-size:12px;color:#475569;flex:1;">Official PTE time limit for this task: {minutes} minutes</div>
+            <button id="startBtn_{key}" style="background:#2563EB;color:#FFFFFF;border:none;border-radius:6px;
+                padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px;">Start</button>
+            <button id="pauseBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
+                padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px;">Pause</button>
+            <button id="resetBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
+                padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px;">Reset</button>
+        </div>
+        <script>
+        (function() {{
+            let remaining_{key} = {total_seconds};
+            let timerId_{key} = null;
+            const clockEl = document.getElementById('clock_{key}');
+
+            function render() {{
+                const m = Math.floor(remaining_{key} / 60);
+                const s = remaining_{key} % 60;
+                clockEl.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+                if (remaining_{key} <= 60) {{
+                    clockEl.style.color = '#B91C1C';
+                }} else if (remaining_{key} <= 180) {{
+                    clockEl.style.color = '#B45309';
+                }} else {{
+                    clockEl.style.color = '#0F172A';
+                }}
+            }}
+
+            document.getElementById('startBtn_{key}').onclick = function() {{
+                if (timerId_{key}) return;
+                timerId_{key} = setInterval(function() {{
+                    if (remaining_{key} > 0) {{
+                        remaining_{key} -= 1;
+                        render();
+                    }} else {{
+                        clockEl.textContent = "Time's up";
+                        clearInterval(timerId_{key});
+                        timerId_{key} = null;
+                    }}
+                }}, 1000);
+            }};
+            document.getElementById('pauseBtn_{key}').onclick = function() {{
+                clearInterval(timerId_{key});
+                timerId_{key} = null;
+            }};
+            document.getElementById('resetBtn_{key}').onclick = function() {{
+                clearInterval(timerId_{key});
+                timerId_{key} = null;
+                remaining_{key} = {total_seconds};
+                render();
+            }};
+            render();
+        }})();
+        </script>
+        """,
+        height=60,
+    )
+
+
+def render_timer(minutes: int, key: str):
+    """A self-contained countdown timer matching the official PTE time limit
+    for this task. Runs in the browser (JS), independent of Streamlit reruns,
+    so it keeps ticking while the person writes."""
+    total_seconds = minutes * 60
+    components.html(
+        f"""
+        <div style="font-family:Inter,sans-serif;display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+            <div id="clock_{key}" style="font-size:22px;font-weight:700;color:#0F172A;min-width:70px;
+                font-variant-numeric:tabular-nums;">{minutes:02d}:00</div>
+            <button id="startBtn_{key}" style="background:#2563EB;color:#FFFFFF;border:none;border-radius:6px;
+                padding:6px 14px;font-weight:600;cursor:pointer;font-size:13px;">Start</button>
+            <button id="pauseBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
+                padding:6px 14px;font-weight:600;cursor:pointer;font-size:13px;">Pause</button>
+            <button id="resetBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
+                padding:6px 14px;font-weight:600;cursor:pointer;font-size:13px;">Reset</button>
+            <span style="font-size:12px;color:#94A3B8;">Official time limit: {minutes} min</span>
+        </div>
+        <script>
+        (function() {{
+            let remaining_{key} = {total_seconds};
+            let interval_{key} = null;
+            const clockEl = document.getElementById('clock_{key}');
+            function render() {{
+                const m = Math.floor(remaining_{key} / 60);
+                const s = remaining_{key} % 60;
+                clockEl.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+                if (remaining_{key} <= 30) {{ clockEl.style.color = '#B91C1C'; }}
+                else if (remaining_{key} <= 120) {{ clockEl.style.color = '#B45309'; }}
+                else {{ clockEl.style.color = '#0F172A'; }}
+                if (remaining_{key} <= 0) {{ clockEl.textContent = "Time's up"; }}
+            }}
+            document.getElementById('startBtn_{key}').onclick = function() {{
+                if (interval_{key}) return;
+                interval_{key} = setInterval(function() {{
+                    if (remaining_{key} > 0) {{ remaining_{key} -= 1; render(); }}
+                    else {{ clearInterval(interval_{key}); interval_{key} = null; }}
+                }}, 1000);
+            }};
+            document.getElementById('pauseBtn_{key}').onclick = function() {{
+                clearInterval(interval_{key});
+                interval_{key} = null;
+            }};
+            document.getElementById('resetBtn_{key}').onclick = function() {{
+                clearInterval(interval_{key});
+                interval_{key} = null;
+                remaining_{key} = {total_seconds};
+                render();
+            }};
+            render();
+        }})();
+        </script>
+        """,
+        height=50,
+    )
+
+
 def tts_button(text: str, key: str):
     safe_text = json.dumps(text)
     components.html(
@@ -911,6 +1042,9 @@ for tab, task_key in zip(main_tabs[:-1], TASK_CONFIGS.keys()):
             left, right = st.columns([1.3, 1])
 
             with left:
+                render_timer(cfg["time_limit_min"], key=task_key)
+                st.write("")
+
                 # Built-in question bank — essay and SWT only, so users don't
                 # need to supply their own prompt/passage to start practicing.
                 if task_key in ("essay", "swt"):
@@ -927,12 +1061,24 @@ for tab, task_key in zip(main_tabs[:-1], TASK_CONFIGS.keys()):
                         if st.button("Random", key=f"random_{task_key}"):
                             st.session_state[f"ctx_{task_key}"] = random.choice(bank)
                             st.rerun()
+
+                    # Show the FULL, untruncated question text before inserting —
+                    # the dropdown label itself is shortened for readability.
+                    if choice != "Write your own...":
+                        idx = labels.index(choice) - 1
+                        st.caption("Full question:")
+                        st.markdown(
+                            f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;'
+                            f'padding:10px 12px;font-size:13.5px;color:#0F172A;margin-bottom:8px;">{esc(bank[idx])}</div>',
+                            unsafe_allow_html=True,
+                        )
+
                     if use_clicked and choice != "Write your own...":
                         idx = labels.index(choice) - 1
                         st.session_state[f"ctx_{task_key}"] = bank[idx]
                         st.rerun()
 
-                context_text = st.text_area(cfg["context_label"], height=110,
+                context_text = st.text_area(cfg["context_label"], height=cfg["context_height"],
                                              placeholder=cfg["context_placeholder"], key=f"ctx_{task_key}")
                 if task_key == "sst" and context_text.strip():
                     tts_button(context_text, key=task_key)
