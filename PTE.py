@@ -1,3 +1,4 @@
+import difflib
 import hashlib
 import json
 import re
@@ -37,11 +38,39 @@ st.markdown(
         --sidebar-bg: #FFFFFF;
     }
 
-    /* Hide standard Streamlit chrome: hamburger menu, footer, header bar */
+    /* Hide standard Streamlit chrome: hamburger menu, footer, deploy toolbar.
+       IMPORTANT: we do NOT zero out or hide the header itself, because the
+       sidebar expand/collapse arrow lives inside it — doing so was the cause
+       of the sidebar becoming permanently inaccessible on both desktop and
+       mobile. Only the menu/toolbar contents are hidden; the header stays
+       present (transparent) so its arrow control keeps working. */
     #MainMenu { visibility: hidden; }
     footer { visibility: hidden; }
-    header[data-testid="stHeader"] { background: transparent; height: 0; }
-    [data-testid="stToolbar"] { visibility: hidden; }
+    header[data-testid="stHeader"] { background: transparent !important; }
+    [data-testid="stToolbar"] { visibility: hidden; height: 0; }
+
+    /* The sidebar expand arrow (shown when the sidebar is collapsed) and the
+       collapse arrow (shown when it's open) use different data-testids across
+       Streamlit versions — style both explicitly so the control is always
+       visible and legible on the light theme, on desktop and mobile alike. */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapsedControl"] {
+        visibility: visible !important;
+        display: flex !important;
+        opacity: 1 !important;
+        z-index: 999999 !important;
+    }
+    [data-testid="collapsedControl"] svg,
+    [data-testid="stSidebarCollapseButton"] svg,
+    [data-testid="stSidebarCollapsedControl"] svg {
+        fill: var(--text) !important;
+    }
+    [data-testid="collapsedControl"] button,
+    [data-testid="stSidebarCollapseButton"] button {
+        visibility: visible !important;
+        display: flex !important;
+    }
 
     .stApp, body, .main, [data-testid="stAppViewContainer"] { background-color: var(--bg) !important; }
     .main * { color: var(--text); }
@@ -280,6 +309,41 @@ SWT_PASSAGES = [
     "Sleep researchers have found that chronic sleep deprivation is associated with a wide range of negative health outcomes, including impaired memory, weakened immune function, and increased risk of cardiovascular disease. Despite this evidence, modern lifestyles characterized by long working hours, late-night screen use, and irregular schedules continue to erode average sleep duration in many industrialized countries. Some employers have begun experimenting with flexible start times and nap facilities in response to growing awareness of sleep's role in productivity and wellbeing, though such initiatives remain far from universal across industries.",
     "Financial literacy, the ability to understand and effectively use various financial skills such as budgeting and investing, remains uneven across populations despite its growing importance in an increasingly complex economic environment. Studies have shown that individuals with stronger financial literacy tend to save more, carry less high-interest debt, and plan more effectively for retirement. In response, some education systems have begun incorporating personal finance education into secondary school curricula, though critics argue that such programs are often too brief or theoretical to meaningfully change long-term financial behavior.",
     "Space exploration has entered a new era characterized by increasing involvement from private companies alongside traditional government space agencies. This shift has substantially reduced the cost of launching satellites and cargo, enabling more frequent missions and opening possibilities for commercial activities such as space tourism and asteroid mining. Critics caution that the growing number of private launches raises concerns about space debris and regulatory oversight, as no single international body currently has comprehensive authority over commercial space activity. Proponents counter that competition among private firms has accelerated innovation at a pace government agencies alone could not match.",
+    "Antibiotic resistance has emerged as one of the most pressing challenges in modern medicine, driven by decades of overuse and misuse of antibiotics in both healthcare and agriculture. Bacteria that survive exposure to these drugs can pass resistant traits to future generations, gradually rendering once-effective treatments useless. Public health officials warn that without coordinated global action to reduce unnecessary prescriptions and develop new classes of antibiotics, routine infections and surgical procedures could become significantly more dangerous within a generation.",
+    "The gig economy, characterized by short-term contracts and freelance work facilitated by digital platforms, has expanded rapidly over the past fifteen years. Supporters argue it offers workers greater flexibility and access to income opportunities that traditional employment structures do not provide. Critics counter that gig workers often lack the job security, benefits, and legal protections afforded to full-time employees, creating a growing segment of the workforce vulnerable to economic instability. Several jurisdictions have begun experimenting with new classifications of employment to address this gap.",
+    "Coral reefs, though covering less than one percent of the ocean floor, support roughly a quarter of all marine species, making them among the most biodiverse ecosystems on the planet. Rising ocean temperatures have triggered widespread coral bleaching events, in which corals expel the algae that provide them with nutrients and color, often leading to mass die-offs if conditions do not improve quickly. Marine biologists are experimenting with heat-resistant coral strains in an effort to preserve reef ecosystems as ocean temperatures continue to rise.",
+    "Microplastics, tiny fragments of plastic less than five millimeters in size, have been detected in nearly every corner of the globe, from remote mountain snow to deep ocean trenches. These particles originate from the breakdown of larger plastic waste as well as from products such as synthetic clothing fibers and cosmetic microbeads. Although research into the health effects of microplastic ingestion in humans is still in its early stages, scientists have already documented their presence in human blood and organ tissue, prompting calls for stricter regulation of plastic production and waste management.",
+    "Telemedicine, the practice of providing clinical healthcare remotely through video calls and digital monitoring tools, expanded dramatically in the wake of global health disruptions and has continued to grow since. Advocates highlight its potential to improve healthcare access in rural and underserved areas where specialists are scarce, while critics note limitations in diagnosing conditions that require physical examination or specialized equipment. Many healthcare systems have settled on hybrid models that combine remote consultations for routine matters with in-person visits reserved for more complex cases.",
+    "The concept of a four-day work week has gained traction among employers and policymakers seeking to improve worker wellbeing without sacrificing productivity. Pilot programs conducted across several industries have generally reported that employees maintain or even increase their output when given a shorter working week, attributing this to reduced burnout and improved focus during working hours. Skeptics caution that the model may not translate easily to sectors requiring continuous staffing, such as healthcare and manufacturing, where reducing hours could necessitate costly increases in hiring.",
+    "Vertical farming, the practice of growing crops in stacked layers within controlled indoor environments, has been proposed as a solution to the challenges of feeding a growing urban population with limited arable land. These systems use significantly less water than traditional agriculture and can operate year-round regardless of external weather conditions, but the high energy costs associated with artificial lighting and climate control have so far limited the technology's profitability outside of high-value crops such as leafy greens and herbs.",
+    "Digital privacy has become an increasingly contentious issue as companies collect vast amounts of personal data to power targeted advertising and personalized services. Consumer advocates argue that current regulations have not kept pace with the scale and sophistication of modern data collection practices, leaving individuals with limited meaningful control over how their information is used. Some governments have introduced stricter data protection laws requiring explicit consent and greater transparency, though enforcement across international borders remains a persistent challenge.",
+    "The rise of electric vehicles has prompted significant investment in charging infrastructure, though availability remains uneven between urban and rural areas. While city dwellers increasingly have access to public charging stations, drivers in more remote regions often face long detours to find a compatible charger, a factor that continues to discourage adoption outside metropolitan centers. Automakers and governments alike have pledged substantial funding toward expanding charging networks, aiming to eliminate this disparity within the next decade.",
+    "Museums around the world are increasingly using augmented reality technology to enhance visitor engagement, allowing patrons to view historical reconstructions or additional context simply by pointing a smartphone at an exhibit. Early studies suggest that these tools can meaningfully improve information retention among younger visitors, though some curators worry that an overreliance on digital enhancement may distract from the direct experience of viewing original artifacts and artworks.",
+    "Water scarcity is projected to affect an increasing share of the global population as climate change alters precipitation patterns and population growth strains existing supplies, particularly in arid and semi-arid regions. Engineers have proposed a range of solutions, from large-scale desalination plants to more efficient irrigation techniques, but the high energy costs and infrastructure investment required mean that many of the most affected regions remain the least equipped to implement these technologies at scale.",
+    "The popularity of plant-based diets has grown substantially in recent years, driven by concerns about environmental sustainability, animal welfare, and personal health. Food manufacturers have responded by developing an expanding range of meat and dairy alternatives designed to replicate the taste and texture of traditional animal products. Nutritionists generally agree that well-planned plant-based diets can meet all necessary dietary requirements, though they caution that highly processed plant-based substitutes are not automatically healthier than the animal products they replace.",
+]
+
+DICTATION_SENTENCES = [
+    "The committee will announce its final decision next Monday morning.",
+    "Researchers discovered a new species of frog in the rainforest.",
+    "Please submit your application before the end of the month.",
+    "The museum's new exhibit attracted thousands of visitors last week.",
+    "Scientists warn that the glacier is melting faster than expected.",
+    "The company plans to open three new offices next year.",
+    "Local farmers rely heavily on rainfall during the growing season.",
+    "The library extended its opening hours for exam preparation week.",
+    "Volunteers spent the weekend cleaning up the coastal shoreline.",
+    "The professor postponed the lecture due to a scheduling conflict.",
+    "Air pollution levels dropped significantly during the public holiday.",
+    "The airline canceled several flights because of the severe storm.",
+    "Her research paper was published in an international journal.",
+    "The government introduced new regulations to protect small businesses.",
+    "Engineers tested the bridge's structural integrity before it opened.",
+    "The city council approved funding for a new public park.",
+    "Students must register for the exam by the given deadline.",
+    "The documentary explores the history of ancient trade routes.",
+    "A sudden power outage delayed the start of the concert.",
+    "The hospital introduced a new system for scheduling appointments.",
 ]
 
 
@@ -417,11 +481,19 @@ Spelling (0-2): 2 = correct spelling. 1 = one spelling error. 0 = more than one 
 
 Convert the raw total (max 12) to a scaled practice score out of 90, proportionally: 10-12/12 is high 80s-90, 8-9/12 is 60s-70s, 4-7/12 is 40s-50s, cascaded zero is 10-20. This is a simplified per-response practice estimate, not the official multi-question overall PTE score.""",
     },
+    "dictation": {
+        "label": "Write From Dictation",
+        "response_label": "Type exactly what you hear",
+        "response_placeholder": "Listen carefully, then type the sentence exactly as you heard it...",
+        "time_limit_min": 1,
+        "no_llm": True,
+    },
 }
 
 for _cfg in TASK_CONFIGS.values():
-    _cfg["max_raw"] = sum(m for _, _, m in _cfg["criteria"])
-    _cfg["system_prompt"] = _cfg["rubric"] + "\n" + COMMON_TAIL
+    if "criteria" in _cfg:
+        _cfg["max_raw"] = sum(m for _, _, m in _cfg["criteria"])
+        _cfg["system_prompt"] = _cfg["rubric"] + "\n" + COMMON_TAIL
 
 
 # ---------------------------------------------------------------------------
@@ -708,73 +780,6 @@ def score_badge(overall: int) -> str:
     return '<span class="pte-badge push">Room to grow</span>'
 
 
-def render_timer(minutes: int, key: str):
-    total_seconds = minutes * 60
-    components.html(
-        f"""
-        <div style="font-family:Inter,sans-serif;display:flex;align-items:center;gap:14px;
-             background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:10px 16px;">
-            <div id="clock_{key}" style="font-family:monospace;font-size:22px;font-weight:700;color:#0F172A;min-width:70px;">
-                {minutes:02d}:00
-            </div>
-            <div style="font-size:12px;color:#475569;flex:1;">Official PTE time limit for this task: {minutes} minutes</div>
-            <button id="startBtn_{key}" style="background:#2563EB;color:#FFFFFF;border:none;border-radius:6px;
-                padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px;">Start</button>
-            <button id="pauseBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
-                padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px;">Pause</button>
-            <button id="resetBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
-                padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px;">Reset</button>
-        </div>
-        <script>
-        (function() {{
-            let remaining_{key} = {total_seconds};
-            let timerId_{key} = null;
-            const clockEl = document.getElementById('clock_{key}');
-
-            function render() {{
-                const m = Math.floor(remaining_{key} / 60);
-                const s = remaining_{key} % 60;
-                clockEl.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
-                if (remaining_{key} <= 60) {{
-                    clockEl.style.color = '#B91C1C';
-                }} else if (remaining_{key} <= 180) {{
-                    clockEl.style.color = '#B45309';
-                }} else {{
-                    clockEl.style.color = '#0F172A';
-                }}
-            }}
-
-            document.getElementById('startBtn_{key}').onclick = function() {{
-                if (timerId_{key}) return;
-                timerId_{key} = setInterval(function() {{
-                    if (remaining_{key} > 0) {{
-                        remaining_{key} -= 1;
-                        render();
-                    }} else {{
-                        clockEl.textContent = "Time's up";
-                        clearInterval(timerId_{key});
-                        timerId_{key} = null;
-                    }}
-                }}, 1000);
-            }};
-            document.getElementById('pauseBtn_{key}').onclick = function() {{
-                clearInterval(timerId_{key});
-                timerId_{key} = null;
-            }};
-            document.getElementById('resetBtn_{key}').onclick = function() {{
-                clearInterval(timerId_{key});
-                timerId_{key} = null;
-                remaining_{key} = {total_seconds};
-                render();
-            }};
-            render();
-        }})();
-        </script>
-        """,
-        height=60,
-    )
-
-
 def render_timer(minutes: int, key: str, auto_start: bool = False):
     """A self-contained countdown timer matching the official PTE time limit
     for this task. Runs in the browser (JS), independent of Streamlit reruns,
@@ -797,6 +802,8 @@ def render_timer(minutes: int, key: str, auto_start: bool = False):
         </div>
         <script>
         (function() {{
+            try {{ window.speechSynthesis.cancel(); }} catch (e) {{}}
+            try {{ window.parent.speechSynthesis.cancel(); }} catch (e) {{}}
             let remaining_{key} = {total_seconds};
             let interval_{key} = null;
             const clockEl = document.getElementById('clock_{key}');
@@ -836,26 +843,98 @@ def render_timer(minutes: int, key: str, auto_start: bool = False):
     )
 
 
-def tts_button(text: str, key: str):
+def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
     safe_text = json.dumps(text)
+    safe_label = json.dumps(button_label)
     components.html(
         f"""
         <div style="font-family:Inter,sans-serif;">
         <button id="playBtn_{key}" style="background:#2563EB;color:#FFFFFF;border:1px solid #2563EB;border-radius:6px;
-            padding:10px 18px;font-weight:500;cursor:pointer;">Play lecture aloud</button>
+            padding:10px 18px;font-weight:500;cursor:pointer;"></button>
         <button id="stopBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
             padding:10px 18px;font-weight:500;cursor:pointer;margin-left:8px;">Stop</button>
         <script>
-        const text_{key} = {safe_text};
-        document.getElementById('playBtn_{key}').onclick = function() {{
-            window.speechSynthesis.cancel();
-            const u = new SpeechSynthesisUtterance(text_{key});
-            u.rate = 0.95;
-            window.speechSynthesis.speak(u);
-        }};
-        document.getElementById('stopBtn_{key}').onclick = function() {{
-            window.speechSynthesis.cancel();
-        }};
+        (function() {{
+            const text_{key} = {safe_text};
+            document.getElementById('playBtn_{key}').textContent = {safe_label};
+
+            // Pick the most natural-sounding English voice available in the
+            // browser instead of whatever default the OS falls back to
+            // (which is usually the flat, robotic-sounding one).
+            function pickVoice() {{
+                const voices = window.speechSynthesis.getVoices() || [];
+                if (!voices.length) return null;
+                const preferredNames = [
+                    "Google US English", "Google UK English Female",
+                    "Microsoft Aria Online (Natural) - English (United States)",
+                    "Microsoft Ava Online (Natural) - English (United States)",
+                    "Microsoft Guy Online (Natural) - English (United States)",
+                    "Samantha", "Alex", "Karen", "Daniel"
+                ];
+                for (const name of preferredNames) {{
+                    const v = voices.find(v => v.name === name);
+                    if (v) return v;
+                }}
+                let v = voices.find(v => /Natural|Neural/i.test(v.name) && /^en/i.test(v.lang));
+                if (v) return v;
+                v = voices.find(v => /Google/i.test(v.name) && /^en/i.test(v.lang));
+                if (v) return v;
+                v = voices.find(v => /^en-US|^en_US/i.test(v.lang));
+                if (v) return v;
+                v = voices.find(v => /^en/i.test(v.lang));
+                return v || voices[0];
+            }}
+
+            function speak() {{
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance(text_{key});
+                const voice = pickVoice();
+                if (voice) {{ u.voice = voice; u.lang = voice.lang; }}
+                // Slightly slower than default with natural pitch reads far
+                // less "robotic" than the browser's flat default rate.
+                u.rate = 0.93;
+                u.pitch = 1.0;
+                u.volume = 1;
+                window.speechSynthesis.speak(u);
+            }}
+
+            document.getElementById('playBtn_{key}').onclick = function() {{
+                if (window.speechSynthesis.getVoices().length === 0) {{
+                    window.speechSynthesis.onvoiceschanged = speak;
+                    // Fallback in case the event never fires on this browser.
+                    setTimeout(speak, 250);
+                }} else {{
+                    speak();
+                }}
+            }};
+            document.getElementById('stopBtn_{key}').onclick = function() {{
+                window.speechSynthesis.cancel();
+            }};
+
+            // Stop playback automatically the moment the user clicks a tab
+            // (New attempt / History), a sidebar nav button, or navigates
+            // away — otherwise audio keeps playing under a different screen.
+            // Streamlit's own st.tabs switch is handled client-side without
+            // a script rerun, so this listener is attached on the parent
+            // document rather than relying on this component unmounting.
+            try {{
+                if (window.parent.__write90StopSpeechHandler) {{
+                    window.parent.document.removeEventListener(
+                        'click', window.parent.__write90StopSpeechHandler, true
+                    );
+                }}
+                const stopHandler = function(e) {{
+                    const target = e.target.closest && e.target.closest(
+                        '[role="tab"], [data-testid="stSidebar"] button, .stButton button'
+                    );
+                    if (target) {{
+                        try {{ window.parent.speechSynthesis.cancel(); }} catch (err) {{}}
+                    }}
+                }};
+                window.parent.__write90StopSpeechHandler = stopHandler;
+                window.parent.document.addEventListener('click', stopHandler, true);
+            }} catch (err) {{}}
+        }})();
         </script>
         </div>
         """,
@@ -919,6 +998,178 @@ def render_result(result: dict, task_key: str):
     st.subheader("Tips to work on")
     for tip in result.get("tips", []):
         st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Write From Dictation — scored locally (no LLM call needed) by diffing the
+# typed response against the original sentence at the word level.
+# ---------------------------------------------------------------------------
+def _extract_words(text: str) -> list:
+    return re.findall(r"[A-Za-z']+", text or "")
+
+
+def compute_dictation_result(original: str, response: str) -> dict:
+    orig_words = _extract_words(original)
+    resp_words = _extract_words(response)
+    orig_norm = [w.lower() for w in orig_words]
+    resp_norm = [w.lower() for w in resp_words]
+
+    matcher = difflib.SequenceMatcher(None, orig_norm, resp_norm)
+    orig_display, resp_display = [], []
+    matched = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            matched += (i2 - i1)
+            for k in range(i1, i2):
+                orig_display.append({"word": orig_words[k], "status": "correct"})
+            for k in range(j1, j2):
+                resp_display.append({"word": resp_words[k], "status": "correct"})
+        elif tag == "replace":
+            for k in range(i1, i2):
+                orig_display.append({"word": orig_words[k], "status": "missing"})
+            for k in range(j1, j2):
+                resp_display.append({"word": resp_words[k], "status": "wrong"})
+        elif tag == "delete":
+            for k in range(i1, i2):
+                orig_display.append({"word": orig_words[k], "status": "missing"})
+        elif tag == "insert":
+            for k in range(j1, j2):
+                resp_display.append({"word": resp_words[k], "status": "extra"})
+
+    total = len(orig_words)
+    accuracy = (matched / total) if total else 0
+    overall = max(0, min(90, round(accuracy * 90)))
+    return {
+        "overall": overall,
+        "matched": matched,
+        "total": total,
+        "orig_display": orig_display,
+        "resp_display": resp_display,
+    }
+
+
+def render_dictation_result(result: dict):
+    overall = result.get("overall", 0)
+    matched = result.get("matched", 0)
+    total = result.get("total", 0)
+    pct = round(matched / total * 100) if total else 0
+
+    st.markdown(
+        f'<div class="pte-score-box"><span class="num">{overall}</span><br>'
+        f'<span class="of90">out of 90</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(f'<div style="text-align:center;">{score_badge(overall)}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<p class="pte-summary">You correctly placed {matched} of {total} words ({pct}% word accuracy).</p>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("---")
+    st.subheader("Correct sentence")
+    parts = []
+    for item in result.get("orig_display", []):
+        cls = "ok-text" if item["status"] == "correct" else "orig-bad"
+        parts.append(f'<span class="{cls}">{esc(item["word"])}</span>')
+    st.markdown(f'<div class="pte-corrected-box">{" ".join(parts)}</div>', unsafe_allow_html=True)
+    st.caption("Struck-through words are ones you missed or got wrong.")
+
+    st.subheader("What you typed")
+    parts2 = []
+    for item in result.get("resp_display", []):
+        cls = "ok-text" if item["status"] == "correct" else "orig-bad"
+        parts2.append(f'<span class="{cls}">{esc(item["word"])}</span>')
+    st.markdown(f'<div class="pte-corrected-box">{" ".join(parts2) if parts2 else "(no words typed)"}</div>', unsafe_allow_html=True)
+    st.caption("Red words were incorrect, out of place, or extra.")
+
+
+def render_dictation_section(cfg: dict, conn):
+    bank = DICTATION_SENTENCES
+    idx_key = "bank_idx_dictation"
+    if idx_key not in st.session_state:
+        st.session_state[idx_key] = 0
+    st.session_state[idx_key] %= len(bank)
+    current_idx = st.session_state[idx_key]
+    sentence = bank[current_idx]
+
+    sub_new, sub_history = st.tabs(["New attempt", "History"])
+
+    with sub_new:
+        left, right = st.columns([1.3, 1])
+
+        with left:
+            render_timer(cfg["time_limit_min"], key=f"dictation_{current_idx}", auto_start=False)
+            st.write("")
+
+            nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 3])
+            with nav_col1:
+                if st.button("Previous", key="prev_dictation", use_container_width=True):
+                    st.session_state[idx_key] = (current_idx - 1) % len(bank)
+                    st.rerun()
+            with nav_col2:
+                if st.button("Next", key="next_dictation", use_container_width=True):
+                    st.session_state[idx_key] = (current_idx + 1) % len(bank)
+                    st.rerun()
+            with nav_col3:
+                st.caption(f"Sentence {current_idx + 1} of {len(bank)}")
+
+            st.markdown("**Listen, then type exactly what you hear**")
+            tts_button(sentence, key=f"dictation_{current_idx}", button_label="Play sentence")
+            st.caption("On the real exam you hear it once — replay as much as you like while practicing.")
+
+            response_text = st.text_area(
+                cfg["response_label"],
+                height=100,
+                placeholder=cfg["response_placeholder"],
+                key=f"resp_dictation_{current_idx}",
+            )
+            submit = st.button(
+                "Check My Sentence",
+                type="primary",
+                key=f"submit_dictation_{current_idx}",
+                disabled=not response_text.strip(),
+            )
+
+        with right:
+            st.markdown(
+                '<div class="w90-guide-box"><h4>Verification Guide</h4>'
+                '<div class="w90-guide-item"><b>Word accuracy</b> — every correctly placed word counts toward your score.</div>'
+                '<div class="w90-guide-item"><b>Spelling</b> — try to match each word exactly.</div>'
+                '<div class="w90-guide-item"><b>Word order</b> — words must appear in the right position in the sentence.</div>'
+                '<div style="font-size:11.5px;color:#1E3A8A;margin-top:10px;padding-top:8px;'
+                'border-top:1px solid #BFDBFE;">Scored locally by comparing your response to the '
+                'original sentence word-for-word — no API call needed.</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("---")
+        if not response_text.strip():
+            st.info("Play the sentence, type what you heard, then click **Check My Sentence**.")
+        elif submit:
+            result = compute_dictation_result(sentence, response_text)
+            save_submission(conn, st.session_state["user"], "dictation", sentence, response_text, result)
+            render_dictation_result(result)
+        else:
+            st.info("Click **Check My Sentence** to see your score.")
+
+    with sub_history:
+        history = get_history(conn, st.session_state["user"], "dictation")
+        if not history:
+            st.info("No attempts yet. Your history for this task will appear here.")
+        else:
+            scores = [row[3] for row in history][::-1]
+            if len(scores) > 1:
+                fixed_score_chart(scores)
+            for created_at, hcontext, hresponse, hoverall, hresult_json in history:
+                with st.expander(f"{created_at[:16].replace('T',' ')} — Score: {hoverall}/90"):
+                    if hcontext:
+                        st.caption(f"Correct sentence: {hcontext}")
+                    st.write(hresponse)
+                    try:
+                        render_dictation_result(json.loads(hresult_json))
+                    except Exception:
+                        st.write("(Could not load detailed breakdown for this entry.)")
 
 
 # ---------------------------------------------------------------------------
@@ -1068,7 +1319,11 @@ render_top_banner()
 
 current_section = st.session_state["current_section"]
 
-if current_section in TASK_CONFIGS:
+if current_section == "dictation":
+    cfg = TASK_CONFIGS["dictation"]
+    render_dictation_section(cfg, conn)
+
+elif current_section in TASK_CONFIGS:
     task_key = current_section
     cfg = TASK_CONFIGS[task_key]
 
