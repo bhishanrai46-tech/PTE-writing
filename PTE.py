@@ -773,6 +773,54 @@ TIP_LIBRARY = {
     "spelling": "Pick one English variant (US or UK) and use it consistently — mixing color/colour or organize/organise costs points.",
 }
 
+# ---------------------------------------------------------------------------
+# Study Tips — curated, high-leverage advice per task, aimed at the specific
+# scoring traits Pearson grades on. Static reference content, not generated.
+# ---------------------------------------------------------------------------
+STUDY_TIPS = {
+    "essay": [
+        "Nail Form first — it's the easiest 2 points on the whole test. Land between 220–290 words so a slightly long or short count never tips you out of the 200–300 range.",
+        "Use a simple, reliable structure: intro (paraphrase the prompt + state your position), two body paragraphs (one idea each, with an example), a short conclusion restating your stance. Examiners reward this predictability under Development & Coherence.",
+        "If the prompt has two parts (\"discuss both views and give your opinion\"), address both explicitly and give equal space to each — a lopsided essay loses Content points even if the writing is strong.",
+        "Vary your connectives. Rotate through however, moreover, consequently, nevertheless, in contrast, as a result, rather than repeating and/but/also — this alone moves the needle on General Linguistic Range.",
+        "Mix sentence types deliberately: include at least one complex sentence (with a subordinate clause) and one conditional per paragraph, alongside simpler ones — pure simple sentences cap your Linguistic Range score.",
+        "Save your last 2 minutes purely for proofreading subject-verb agreement, articles (a/an/the), and spelling — these small slips are the single most common way a strong essay loses points.",
+        "Pick US or UK spelling and stick to it for the entire response — mixing color/colour or organize/organise triggers a Spelling deduction even if every individual word is spelled correctly.",
+        "Use topic-relevant academic vocabulary, but only words you're confident using correctly — one badly-used \"impressive\" word does more damage than a well-used simple one.",
+    ],
+    "swt": [
+        "It must be ONE sentence — no full stop until the very end. Use semicolons, colons, or subordinate clauses (while, although, which) to link ideas instead of starting a new sentence.",
+        "Stay inside 5–75 words, but aim for 30–40 — long enough to capture the main idea and a key supporting point, short enough to stay tightly synthesized.",
+        "Identify the passage's single main idea first, then ask what one supporting detail is essential to it. Trying to include everything usually produces a disconnected, low-coherence sentence.",
+        "Paraphrase rather than lifting phrases directly from the passage — reusing the source's exact wording caps your Content score even if the sentence is accurate.",
+        "Skip the throat-clearing. Don't open with \"This passage talks about\" or \"The passage is about\" — go straight into the content in your own words; every word here should be doing work.",
+        "Read your sentence back once before submitting and check it's grammatically one sentence — if you can put a full stop anywhere in the middle and it still makes sense, restructure it.",
+    ],
+    "sst": [
+        "Take notes while listening — you won't see the transcript at any point, so jot keywords, numbers, and cause/effect signal words (however, as a result, in contrast) as you hear them.",
+        "Target 50–70 words in a single paragraph, no bullet points or line breaks — Form drops a full point outside 40–100 words.",
+        "Capture the lecture's overall argument plus 2–3 supporting points, not every detail — an overstuffed summary usually loses coherence and clarity faster than it gains content.",
+        "Write your summary as connected sentences, not a list of notes strung together — examiners are explicitly checking that ideas are synthesized, not just captured.",
+        "If you missed a specific number or name, don't guess wildly — describe it generally (\"a significant increase\") rather than inventing a wrong detail, which reads as a comprehension error.",
+        "Reread your response once before time is up to confirm it reads as one coherent paragraph summarizing the whole talk, not just the opening or closing lines.",
+    ],
+    "dictation": [
+        "Listen for the sentence's core structure first (subject–verb–object), then reconstruct modifiers and connecting words afterward from memory.",
+        "You typically hear it only once — resist the urge to write while still listening. Listen fully, then write immediately after from memory.",
+        "Small function words (a, the, of, in, that) are the most commonly dropped words — proofread specifically for these once you've typed the sentence.",
+        "Word order matters as much as word choice — read your typed sentence back and check it flows the way natural English would, not just that the words are all present.",
+        "Practice with unfamiliar collocations (\"structural integrity\", \"regulatory oversight\") since real dictation sentences often include one less-common phrase alongside simple ones.",
+        "If you're unsure of a word's spelling, write your best phonetic guess rather than skipping it — a wrong-but-present word can still register as partially correct; a gap never does.",
+    ],
+}
+
+STUDY_TIPS_GENERAL = [
+    "Across every task, the fastest points to lose are Form and Spelling — both are entirely within your control regardless of how strong your ideas are. Nail those first before polishing content.",
+    "Read the rubric criteria for each task type in the sidebar's Verification Guide before you attempt it — knowing exactly what's being scored changes how you write in real time.",
+    "Consistency beats brilliance. A 90 comes from reliably avoiding small errors across every response, not from occasional excellent responses mixed with weak ones.",
+    "Review your History tab regularly — the recurring weaknesses PTE examiners flag for you are far more useful to fix than chasing a single high score.",
+]
+
 
 # ---------------------------------------------------------------------------
 # Grading
@@ -983,8 +1031,15 @@ def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
             padding:10px 18px;font-weight:500;cursor:pointer;"></button>
         <button id="stopBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
             padding:10px 18px;font-weight:500;cursor:pointer;margin-left:8px;">Stop</button>
+        <div id="voiceLabel_{key}" style="font-size:11px;color:#94A3B8;margin-top:6px;"></div>
         <script>
         (function() {{
+            // Use the PARENT window's speech engine everywhere (voice list,
+            // speaking, and cancelling) rather than this iframe's own copy.
+            // Some browsers give an iframe a separate/emptier voice list than
+            // the top-level page, which silently forces a worse fallback
+            // voice even though better ones are actually installed.
+            const synth = window.parent.speechSynthesis;
             const text_{key} = {safe_text};
             document.getElementById('playBtn_{key}').textContent = {safe_label};
 
@@ -994,10 +1049,13 @@ def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
             // each sentence boundary, which reads as noticeably more natural.
             const sentences_{key} = text_{key}.match(/[^.!?]+[.!?]*/g) || [text_{key}];
 
-            // Pick the most natural-sounding English voice available in the
-            // browser instead of whatever default the OS falls back to.
+            // Names known to sound distinctly robotic/dated — actively
+            // avoided even if nothing better is found, since these are the
+            // most common cause of "still sounds robotic" complaints.
+            const AVOID_NAMES = /david desktop|zira desktop|mark desktop|espeak|compact|fred|whisper|junior|bells|bad news|boing|cellos|deranged|hysterical|pipe organ|trinoids|zarvox|bahh/i;
+
             function pickVoice() {{
-                const voices = window.speechSynthesis.getVoices() || [];
+                const voices = (synth.getVoices() || []).filter(v => !AVOID_NAMES.test(v.name));
                 if (!voices.length) return null;
                 const preferredNames = [
                     "Microsoft Aria Online (Natural) - English (United States)",
@@ -1005,7 +1063,7 @@ def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
                     "Microsoft Emma Online (Natural) - English (United States)",
                     "Microsoft Guy Online (Natural) - English (United States)",
                     "Google US English", "Google UK English Female", "Google UK English Male",
-                    "Samantha", "Karen", "Daniel", "Alex"
+                    "Samantha", "Karen", "Daniel", "Moira", "Tessa"
                 ];
                 for (const name of preferredNames) {{
                     const v = voices.find(v => v.name === name);
@@ -1038,21 +1096,23 @@ def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
                     u.pitch = 1.0;
                     u.volume = 1;
                     u.onend = function() {{ i += 1; next(); }};
-                    window.speechSynthesis.speak(u);
+                    synth.speak(u);
                 }}
                 next();
             }}
 
             function speak() {{
-                window.speechSynthesis.cancel();
+                synth.cancel();
                 playToken_{key} += 1;
                 const voice = pickVoice();
+                const label = document.getElementById('voiceLabel_{key}');
+                if (label) {{ label.textContent = voice ? ('Voice: ' + voice.name) : 'Voice: browser default'; }}
                 speakQueue(voice, playToken_{key});
             }}
 
             document.getElementById('playBtn_{key}').onclick = function() {{
-                if (window.speechSynthesis.getVoices().length === 0) {{
-                    window.speechSynthesis.onvoiceschanged = speak;
+                if (synth.getVoices().length === 0) {{
+                    synth.onvoiceschanged = speak;
                     // Fallback in case the event never fires on this browser.
                     setTimeout(speak, 250);
                 }} else {{
@@ -1061,7 +1121,7 @@ def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
             }};
             document.getElementById('stopBtn_{key}').onclick = function() {{
                 playToken_{key} += 1;
-                window.speechSynthesis.cancel();
+                synth.cancel();
             }};
 
             // Stop playback automatically the moment the user clicks a tab
@@ -1453,8 +1513,12 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("NAVIGATE")
-    nav_options = list(TASK_CONFIGS.keys()) + ["progress"]
-    nav_labels = {**{k: v["label"] for k, v in TASK_CONFIGS.items()}, "progress": "My Progress"}
+    nav_options = list(TASK_CONFIGS.keys()) + ["study_tips", "progress"]
+    nav_labels = {
+        **{k: v["label"] for k, v in TASK_CONFIGS.items()},
+        "study_tips": "Study Tips",
+        "progress": "My Progress",
+    }
     if "current_section" not in st.session_state:
         st.session_state["current_section"] = "essay"
     for opt in nav_options:
@@ -1607,6 +1671,24 @@ elif current_section in TASK_CONFIGS:
                         render_result(json.loads(hresult_json), task_key)
                     except Exception:
                         st.write("(Could not load detailed breakdown for this entry.)")
+
+elif current_section == "study_tips":
+    st.subheader("Study Tips — how to reach 90")
+    st.caption("Curated, rubric-specific advice for each task type. Not personalized — your recurring weaknesses are on the My Progress page.")
+
+    st.markdown("---")
+    st.markdown("**Across every task**")
+    for tip in STUDY_TIPS_GENERAL:
+        st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
+
+    for task_key, cfg in TASK_CONFIGS.items():
+        tips = STUDY_TIPS.get(task_key, [])
+        if not tips:
+            continue
+        st.markdown("---")
+        st.subheader(cfg["label"])
+        for tip in tips:
+            st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
 
 elif current_section == "progress":
     all_hist = get_all_history(conn, st.session_state["user"])
