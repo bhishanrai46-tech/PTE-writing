@@ -92,8 +92,9 @@ st.markdown(
     [data-testid="stSidebar"] .stButton > button { background-color: #FFFFFF !important; border: 1px solid var(--border) !important; color: var(--text) !important; }
     [data-testid="stSidebar"] .stButton > button:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
     [data-testid="stSidebar"] .stTextInput input { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; }
-    [data-testid="stSidebar"] .stProgress > div > div { background-color: var(--accent) !important; }
-    [data-testid="stSidebar"] .stProgress { background-color: var(--border) !important; border-radius: 4px; }
+    [data-testid="stSidebar"] [data-testid="stProgress"] { background-color: transparent !important; }
+    [data-testid="stSidebar"] [data-testid="stProgress"] > div { background-color: var(--border) !important; border-radius: 4px; overflow: hidden; }
+    [data-testid="stSidebar"] [data-testid="stProgress"] [role="progressbar"] { background-color: var(--accent) !important; }
 
     .stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid var(--border); }
     .stTabs [data-baseweb="tab"] { color: var(--text-secondary) !important; font-weight: 600; }
@@ -147,7 +148,9 @@ st.markdown(
     }
 
     .stRadio label, .stCheckbox label { color: var(--text) !important; }
-    .stProgress > div > div { background-color: var(--accent) !important; }
+    [data-testid="stProgress"] { background-color: transparent !important; }
+    [data-testid="stProgress"] > div { background-color: #E2E8F0 !important; border-radius: 4px; overflow: hidden; }
+    [data-testid="stProgress"] [role="progressbar"] { background-color: var(--accent) !important; }
 
     /* ---- Write90 brand elements — solid color, no gradients ---- */
     .w90-banner {
@@ -1409,14 +1412,15 @@ if not healthy:
 if "user" not in st.session_state:
     st.session_state["user"] = None
 
-# Restore login after a page refresh using a session token stored in the URL.
-if not st.session_state["user"]:
-    token = st.query_params.get("t")
-    if token:
-        restored_user = get_session_user(conn, token)
-        if restored_user:
-            st.session_state["user"] = restored_user
-            st.session_state["session_token"] = token
+# NOTE: login is intentionally NOT restored from a URL query parameter.
+# Putting the session token in the URL (as this app previously did) means
+# that URL — the exact one shown in the address bar and copy/pasted when
+# sharing the app — carries a live login credential. Anyone who opens a
+# shared link would be auto-logged-in as the person who shared it, seeing
+# and potentially overwriting their saved history. Every browser/tab/device
+# now always starts at the sign-in screen; each person must sign in (or
+# sign up) on their own device, and their work is saved only to their own
+# account, never anyone else's.
 
 if not st.session_state["user"]:
     render_top_banner()
@@ -1437,7 +1441,6 @@ if not st.session_state["user"]:
                 token = create_session(conn, lu.strip())
                 st.session_state["user"] = lu.strip()
                 st.session_state["session_token"] = token
-                st.query_params["t"] = token
                 st.rerun()
             elif db_error:
                 st.error("Could not reach the database.")
@@ -1458,7 +1461,6 @@ if not st.session_state["user"]:
                     token = create_session(conn, su.strip())
                     st.session_state["user"] = su.strip()
                     st.session_state["session_token"] = token
-                    st.query_params["t"] = token
                     st.rerun()
                 elif err == "duplicate":
                     st.error("That username is already taken.")
