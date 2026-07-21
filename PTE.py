@@ -3,7 +3,10 @@ import hashlib
 import json
 import re
 import secrets
-from datetime import date, datetime
+import smtplib
+import ssl
+from datetime import date, datetime, timedelta, timezone
+from email.mime.text import MIMEText
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -89,7 +92,7 @@ st.markdown(
     [data-testid="stSidebar"] { background-color: var(--sidebar-bg) !important; border-right: 1px solid var(--border); }
     [data-testid="stSidebar"] * { color: var(--text) !important; }
     [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * { color: var(--text-secondary) !important; }
-    [data-testid="stSidebar"] .stButton > button { background-color: #FFFFFF !important; border: 1px solid var(--border) !important; color: var(--text) !important; }
+    [data-testid="stSidebar"] .stButton > button { background-color: #FFFFFF !important; border: 1.5px solid #CBD5E1 !important; color: var(--text) !important; }
     [data-testid="stSidebar"] .stButton > button:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
     [data-testid="stSidebar"] .stTextInput input { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; }
     [data-testid="stSidebar"] [data-testid="stProgress"] { background-color: transparent !important; }
@@ -101,6 +104,12 @@ st.markdown(
     .stTabs [aria-selected="true"] { color: var(--accent) !important; border-bottom-color: var(--accent) !important; }
 
     .stTextArea textarea { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 8px; font-size: 14.5px; padding: 12px 14px !important; }
+    /* Hide Streamlit's "Press Ctrl+Enter to apply" / "Press Enter to apply"
+       hint that appears under text inputs while typing — covers the testid
+       used in current versions plus older fallback class names. */
+    [data-testid="InputInstructions"] { display: none !important; visibility: hidden !important; }
+    [data-testid="stTextAreaInstructions"] { display: none !important; visibility: hidden !important; }
+    [data-testid="stWidgetInstructions"] { display: none !important; visibility: hidden !important; }
     .stTextArea textarea:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(37,99,235,0.15) !important; }
     .stTextArea textarea::placeholder { color: #94A3B8 !important; }
     .stTextInput input { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 6px; }
@@ -130,19 +139,20 @@ st.markdown(
 
     /* Buttons — solid colors, no gradients */
     .stButton > button, .stButton > button * { color: var(--text) !important; }
-    .stButton > button { background-color: #FFFFFF !important; border: 1px solid var(--border) !important; border-radius: 8px !important; font-weight: 500; transition: all 0.15s ease; }
+    .stButton > button { background-color: #FFFFFF !important; border: 1.5px solid #CBD5E1 !important; border-radius: 8px !important; font-weight: 500; transition: all 0.15s ease; }
     .stButton > button:hover, .stButton > button:hover * { color: var(--accent) !important; }
     .stButton > button:hover { border-color: var(--accent) !important; }
     .stButton > button[kind="primary"], .stButton > button[kind="primary"] * { color: #FFFFFF !important; }
     .stButton > button[kind="primary"] {
         background-color: var(--accent) !important;
-        border-color: var(--accent) !important;
+        border: 1.5px solid var(--accent-hover) !important;
         font-weight: 700 !important;
         box-shadow: 0 2px 6px rgba(37,99,235,0.25);
     }
     .stButton > button[kind="primary"]:hover, .stButton > button[kind="primary"]:hover * { color: #FFFFFF !important; }
     .stButton > button[kind="primary"]:hover {
         background-color: var(--accent-hover) !important;
+        border-color: #1E40AF !important;
         box-shadow: 0 4px 10px rgba(37,99,235,0.35);
         transform: translateY(-1px);
     }
@@ -605,27 +615,162 @@ def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-def create_user(conn, username: str, password: str):
-    """Returns (success, error). error is None on success, 'duplicate' if the
-    username is genuinely taken, or the raw error string for anything else
-    (permissions, missing table, etc.) so it isn't misreported as 'taken'."""
+def is_valid_email(email: str) -> bool:
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email or ""))
+
+
+def generate_verification_code() -> str:
+    return f"{secrets.randbelow(1000000):06d}"
+
+
+def send_verification_email(to_email: str, code: str):
+    """Sends a 6-digit verification code by email using standard SMTP.
+    Returns (success, error). Requires SMTP_HOST/PORT/USER/PASSWORD in
+    secrets — see the setup guide. Works with any SMTP provider (Gmail
+    with an app password, SendGrid, Resend's SMTP relay, your own mail
+    server, etc.), so there's no vendor lock-in to a specific email API."""
+    host = st.secrets.get("SMTP_HOST", "").strip()
+    port = int(st.secrets.get("SMTP_PORT", 587))
+    user = st.secrets.get("SMTP_USER", "").strip()
+    password = st.secrets.get("SMTP_PASSWORD", "").strip()
+    from_addr = st.secrets.get("SMTP_FROM", "").strip() or user
+
+    if not host or not user or not password:
+        return False, (
+            "Email isn't configured yet. Add SMTP_HOST, SMTP_PORT, SMTP_USER, "
+            "SMTP_PASSWORD (and optionally SMTP_FROM) to your app's secrets."
+        )
+
+    msg = MIMEText(
+        f"Your {APP_NAME} verification code is: {code}\n\n"
+        f"This code expires in 10 minutes. If you didn't request this, you can ignore this email."
+    )
+    msg["Subject"] = f"{APP_NAME} verification code: {code}"
+    msg["From"] = from_addr
+    msg["To"] = to_email
+
     try:
-        conn.table("users").insert({"username": username, "password_hash": hash_pw(password)}).execute()
+        if port == 465:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(host, port, context=context, timeout=15) as server:
+                server.login(user, password)
+                server.sendmail(from_addr, [to_email], msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=15) as server:
+                server.starttls(context=ssl.create_default_context())
+                server.login(user, password)
+                server.sendmail(from_addr, [to_email], msg.as_string())
         return True, None
     except Exception as e:
-        msg = str(e)
-        if "duplicate key" in msg.lower() or "23505" in msg or "already exists" in msg.lower():
-            return False, "duplicate"
-        return False, msg
+        return False, str(e)
 
 
-def verify_user(conn, username: str, password: str) -> bool:
+def upsert_pending_signup(conn, username: str, email: str, password: str):
+    """Starts (or restarts) a sign-up: stores the account as unverified with
+    a fresh code. Returns (ok, error, code). error is 'username_taken' if the
+    username belongs to an already-verified account, 'email_taken' if the
+    email belongs to a different already-verified account, or a raw string
+    for other database errors. Re-attempting a still-unverified username is
+    allowed (overwrites the pending code/password), so a failed or abandoned
+    signup doesn't permanently lock the username."""
     try:
-        res = conn.table("users").select("password_hash").eq("username", username).execute()
-    except Exception:
-        return False
+        existing = conn.table("users").select("username,email,email_verified").eq("username", username).execute()
+        rows = existing.data or []
+        if rows and rows[0].get("email_verified"):
+            return False, "username_taken", None
+
+        email_owner = conn.table("users").select("username,email_verified").eq("email", email).execute()
+        for row in (email_owner.data or []):
+            if row["username"] != username and row.get("email_verified"):
+                return False, "email_taken", None
+
+        code = generate_verification_code()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        payload = {
+            "username": username,
+            "email": email,
+            "password_hash": hash_pw(password),
+            "email_verified": False,
+            "verification_code": code,
+            "verification_expires_at": expires_at,
+        }
+        if rows:
+            conn.table("users").update(payload).eq("username", username).execute()
+        else:
+            conn.table("users").insert(payload).execute()
+        return True, None, code
+    except Exception as e:
+        return False, str(e), None
+
+
+def verify_signup_code(conn, username: str, code: str):
+    """Returns (ok, error). error in {'not_found','expired','mismatch'} or a
+    raw string for other database errors."""
+    try:
+        res = conn.table("users").select(
+            "verification_code,verification_expires_at,email_verified"
+        ).eq("username", username).execute()
+        rows = res.data or []
+        if not rows:
+            return False, "not_found"
+        row = rows[0]
+        if row.get("email_verified"):
+            return True, None
+        expires_at = row.get("verification_expires_at")
+        if expires_at:
+            try:
+                if datetime.now(timezone.utc) > datetime.fromisoformat(expires_at.replace("Z", "+00:00")):
+                    return False, "expired"
+            except ValueError:
+                pass
+        if row.get("verification_code") != code.strip():
+            return False, "mismatch"
+        conn.table("users").update({
+            "email_verified": True,
+            "verification_code": None,
+            "verification_expires_at": None,
+        }).eq("username", username).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def resend_verification_code(conn, username: str):
+    """Returns (ok, error, email)."""
+    try:
+        res = conn.table("users").select("email,email_verified").eq("username", username).execute()
+        rows = res.data or []
+        if not rows:
+            return False, "not_found", None
+        if rows[0].get("email_verified"):
+            return True, None, rows[0]["email"]
+        email = rows[0]["email"]
+        code = generate_verification_code()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        conn.table("users").update({
+            "verification_code": code,
+            "verification_expires_at": expires_at,
+        }).eq("username", username).execute()
+        ok, err = send_verification_email(email, code)
+        if not ok:
+            return False, err, email
+        return True, None, email
+    except Exception as e:
+        return False, str(e), None
+
+
+def verify_user(conn, username: str, password: str):
+    """Returns (status, error). status is 'ok', 'unverified', or 'invalid'."""
+    try:
+        res = conn.table("users").select("password_hash,email_verified").eq("username", username).execute()
+    except Exception as e:
+        return "error", str(e)
     rows = res.data or []
-    return bool(rows) and rows[0]["password_hash"] == hash_pw(password)
+    if not rows or rows[0]["password_hash"] != hash_pw(password):
+        return "invalid", None
+    if not rows[0].get("email_verified"):
+        return "unverified", None
+    return "ok", None
 
 
 def create_session(conn, username: str) -> str:
@@ -648,6 +793,68 @@ def delete_session(conn, token: str):
         conn.table("sessions").delete().eq("token", token).execute()
     except Exception:
         pass
+
+
+def set_session_cookie(token: str):
+    """Persists login across a page refresh using a browser cookie scoped to
+    this device only — never the URL. A cookie isn't part of a link you'd
+    copy and share, so this restores login on refresh without the leak the
+    old URL-token approach had."""
+    max_age = 60 * 60 * 24 * 30  # 30 days
+    components.html(
+        f"""
+        <script>
+        try {{
+            window.parent.document.cookie =
+                "write90_session={token}; path=/; max-age={max_age}; samesite=Lax";
+        }} catch (e) {{}}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def clear_session_cookie():
+    components.html(
+        """
+        <script>
+        try {
+            window.parent.document.cookie = "write90_session=; path=/; max-age=0";
+        } catch (e) {}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def try_restore_session_from_cookie():
+    """If no one is logged in and the URL doesn't already carry a restore
+    token, ask the browser for the write90_session cookie. If found, it
+    briefly appends the token to the URL (replacing the current history
+    entry, not adding a new one) so this Python script can read it via
+    st.query_params on the next run — then the token is stripped from the
+    URL again immediately after restoring, so it never sits there to be
+    copied and shared."""
+    components.html(
+        """
+        <script>
+        (function() {
+            try {
+                var doc = window.parent.document;
+                var params = new URLSearchParams(window.parent.location.search);
+                if (params.has('t')) return;
+                var match = doc.cookie.match(/(?:^|; )write90_session=([^;]*)/);
+                if (!match) return;
+                var token = decodeURIComponent(match[1]);
+                var url = new URL(window.parent.location.href);
+                url.searchParams.set('t', token);
+                window.parent.location.replace(url.toString());
+            } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 
 def save_submission(conn, username: str, task_key: str, context_text: str, response_text: str, result: dict):
@@ -1312,7 +1519,7 @@ def render_dictation_section(cfg: dict, conn):
     sub_new, sub_history = st.tabs(["New attempt", "History"])
 
     with sub_new:
-        left, right = st.columns([1.3, 1])
+        left, right = st.columns([2.3, 1])
 
         with left:
             render_timer(cfg["time_limit_min"], key=f"dictation_{current_idx}", auto_start=False)
@@ -1389,6 +1596,57 @@ def render_dictation_section(cfg: dict, conn):
                         st.write("(Could not load detailed breakdown for this entry.)")
 
 
+@st.dialog("Write Your Own Essay")
+def custom_essay_dialog():
+    cfg = TASK_CONFIGS["essay"]
+    lo, hi = cfg["word_range"]
+
+    custom_question = st.text_area(
+        "Your essay question",
+        height=100,
+        placeholder="Paste or write any essay prompt here...",
+        key="custom_essay_question",
+    )
+    custom_response = st.text_area(
+        "Your essay (custom prompt)",
+        height=420,
+        placeholder="Write or paste your 200–300 word essay here...",
+        key="custom_essay_response",
+    )
+    render_live_word_counter(
+        counter_key="custom_essay",
+        textarea_label="Your essay (custom prompt)",
+        lo=lo, hi=hi,
+        initial_text=custom_response,
+    )
+    st.caption(cfg["word_hint"])
+
+    submit = st.button(
+        "Mark My Response Against Rubric",
+        type="primary",
+        disabled=not (custom_question.strip() and custom_response.strip()),
+    )
+    if submit:
+        if not api_key:
+            st.error("Enter your Anthropic API key in the sidebar first.")
+        elif get_usage_count(conn, st.session_state["user"]) >= DAILY_LIMIT:
+            st.error(f"Daily limit of {DAILY_LIMIT} responses reached. Please try again tomorrow.")
+        else:
+            with st.spinner("Marking carefully against the official rubric… this can take a little while."):
+                try:
+                    wc = word_count(custom_response)
+                    result = call_claude(api_key, "essay", custom_question, custom_response, wc)
+                    bump_usage_count(conn, st.session_state["user"])
+                    save_submission(conn, st.session_state["user"], "essay", custom_question, custom_response, result)
+                    render_result(result, "essay")
+                except GradingError as e:
+                    st.error("The examiner's response didn't come back in a readable format. Please try again.")
+                    with st.expander("Technical details"):
+                        st.code(e.raw_text[-2000:] if e.raw_text else str(e))
+                except Exception as e:
+                    st.error(f"Something went wrong marking your response: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Auth gate
 # ---------------------------------------------------------------------------
@@ -1412,15 +1670,22 @@ if not healthy:
 if "user" not in st.session_state:
     st.session_state["user"] = None
 
-# NOTE: login is intentionally NOT restored from a URL query parameter.
-# Putting the session token in the URL (as this app previously did) means
-# that URL — the exact one shown in the address bar and copy/pasted when
-# sharing the app — carries a live login credential. Anyone who opens a
-# shared link would be auto-logged-in as the person who shared it, seeing
-# and potentially overwriting their saved history. Every browser/tab/device
-# now always starts at the sign-in screen; each person must sign in (or
-# sign up) on their own device, and their work is saved only to their own
-# account, never anyone else's.
+# Restore login on refresh from a browser cookie (device-local, never part
+# of a shareable URL) rather than the old URL-token approach. The cookie
+# read happens client-side; if found, the token briefly lands in the URL
+# (replacing, not adding, the current history entry) purely so this script
+# can read it once via st.query_params — then it's stripped again below so
+# it never sits in the address bar to be copied and shared.
+if not st.session_state["user"]:
+    restore_token = st.query_params.get("t")
+    if restore_token:
+        restored_user = get_session_user(conn, restore_token)
+        if restored_user:
+            st.session_state["user"] = restored_user
+            st.session_state["session_token"] = restore_token
+        del st.query_params["t"]
+    else:
+        try_restore_session_from_cookie()
 
 if not st.session_state["user"]:
     render_top_banner()
@@ -1431,43 +1696,97 @@ if not st.session_state["user"]:
         lu = st.text_input("Username", key="login_user")
         lp = st.text_input("Password", type="password", key="login_pass")
         if st.button("Log in"):
-            db_error = None
-            try:
-                ok = verify_user(conn, lu.strip(), lp)
-            except Exception as e:
-                ok = False
-                db_error = str(e)
-            if ok:
+            status, err = verify_user(conn, lu.strip(), lp)
+            if status == "ok":
                 token = create_session(conn, lu.strip())
                 st.session_state["user"] = lu.strip()
                 st.session_state["session_token"] = token
+                set_session_cookie(token)
                 st.rerun()
-            elif db_error:
+            elif status == "unverified":
+                st.session_state["pending_verify_user"] = lu.strip()
+                st.warning("This account's email hasn't been verified yet. Enter the code sent to your email in the Sign up tab.")
+                st.rerun()
+            elif status == "error":
                 st.error("Could not reach the database.")
                 with st.expander("Technical details"):
-                    st.code(db_error)
+                    st.code(err)
             else:
                 st.error("Incorrect username or password.")
 
     with tab_signup:
-        su = st.text_input("Choose a username", key="signup_user")
-        sp = st.text_input("Choose a password", type="password", key="signup_pass")
-        if st.button("Create account"):
-            if not su.strip() or not sp:
-                st.error("Enter a username and password.")
-            else:
-                ok, err = create_user(conn, su.strip(), sp)
-                if ok:
-                    token = create_session(conn, su.strip())
-                    st.session_state["user"] = su.strip()
-                    st.session_state["session_token"] = token
+        pending_user = st.session_state.get("pending_verify_user")
+
+        if pending_user:
+            st.markdown(f"**Verify your email for `{esc(pending_user)}`**")
+            st.caption("Enter the 6-digit code we emailed you. It expires in 10 minutes.")
+            code_input = st.text_input("Verification code", key="verify_code_input", max_chars=6)
+            col_verify, col_resend, col_cancel = st.columns(3)
+            with col_verify:
+                if st.button("Verify & Continue", type="primary", use_container_width=True):
+                    if not code_input.strip():
+                        st.error("Enter the code from your email.")
+                    else:
+                        ok, err = verify_signup_code(conn, pending_user, code_input.strip())
+                        if ok:
+                            token = create_session(conn, pending_user)
+                            st.session_state["user"] = pending_user
+                            st.session_state["session_token"] = token
+                            st.session_state.pop("pending_verify_user", None)
+                            set_session_cookie(token)
+                            st.rerun()
+                        elif err == "expired":
+                            st.error("That code expired. Click Resend for a new one.")
+                        elif err == "mismatch":
+                            st.error("That code doesn't match. Check your email and try again.")
+                        elif err == "not_found":
+                            st.error("Something went wrong — please sign up again.")
+                            st.session_state.pop("pending_verify_user", None)
+                        else:
+                            st.error("Could not verify — a database error occurred.")
+                            with st.expander("Technical details"):
+                                st.code(err)
+            with col_resend:
+                if st.button("Resend code", use_container_width=True):
+                    ok, err, email = resend_verification_code(conn, pending_user)
+                    if ok:
+                        st.success(f"New code sent to {email}.")
+                    else:
+                        st.error("Could not send the email.")
+                        with st.expander("Technical details"):
+                            st.code(err)
+            with col_cancel:
+                if st.button("Use different details", use_container_width=True):
+                    st.session_state.pop("pending_verify_user", None)
                     st.rerun()
-                elif err == "duplicate":
-                    st.error("That username is already taken.")
+        else:
+            su = st.text_input("Choose a username", key="signup_user")
+            se = st.text_input("Email address", key="signup_email")
+            sp = st.text_input("Choose a password", type="password", key="signup_pass")
+            if st.button("Create account"):
+                if not su.strip() or not sp:
+                    st.error("Enter a username and password.")
+                elif not is_valid_email(se.strip()):
+                    st.error("Enter a valid email address.")
                 else:
-                    st.error("Could not create the account — a database error occurred.")
-                    with st.expander("Technical details"):
-                        st.code(err)
+                    ok, err, code = upsert_pending_signup(conn, su.strip(), se.strip(), sp)
+                    if ok:
+                        sent_ok, sent_err = send_verification_email(se.strip(), code)
+                        if sent_ok:
+                            st.session_state["pending_verify_user"] = su.strip()
+                            st.rerun()
+                        else:
+                            st.error("Account created, but the verification email couldn't be sent.")
+                            with st.expander("Technical details"):
+                                st.code(sent_err)
+                    elif err == "username_taken":
+                        st.error("That username is already taken.")
+                    elif err == "email_taken":
+                        st.error("That email is already registered to another account.")
+                    else:
+                        st.error("Could not create the account — a database error occurred.")
+                        with st.expander("Technical details"):
+                            st.code(err)
 
     st.stop()
 
@@ -1493,6 +1812,7 @@ with st.sidebar:
             delete_session(conn, token)
         st.session_state["user"] = None
         st.session_state.pop("session_token", None)
+        clear_session_cookie()
         if "t" in st.query_params:
             del st.query_params["t"]
         st.rerun()
@@ -1565,7 +1885,7 @@ elif current_section in TASK_CONFIGS:
     sub_new, sub_history = st.tabs(["New attempt", "History"])
 
     with sub_new:
-        left, right = st.columns([1.3, 1])
+        left, right = st.columns([2.3, 1])
 
         with left:
             # Timer key includes the question index so it resets fresh for
@@ -1586,6 +1906,10 @@ elif current_section in TASK_CONFIGS:
             with nav_col3:
                 st.caption(f"Question {current_idx + 1} of {len(bank)}")
 
+            if task_key == "essay":
+                if st.button("✏️ Write Your Own Essay", key="open_custom_essay", use_container_width=True):
+                    custom_essay_dialog()
+
             if task_key == "sst":
                 # Real PTE exam behavior: you LISTEN to the lecture, you never
                 # see it written out. Show only the audio control, not the
@@ -1603,7 +1927,7 @@ elif current_section in TASK_CONFIGS:
                     unsafe_allow_html=True,
                 )
 
-            response_text = st.text_area(cfg["response_label"], height=220,
+            response_text = st.text_area(cfg["response_label"], height=420,
                                           placeholder=cfg["response_placeholder"],
                                           key=f"resp_{task_key}_{current_idx}")
             wc = word_count(response_text)
