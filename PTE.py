@@ -1,8 +1,12 @@
+import difflib
 import hashlib
 import json
 import re
 import secrets
-from datetime import date, datetime
+import smtplib
+import ssl
+from datetime import date, datetime, timedelta, timezone
+from email.mime.text import MIMEText
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -37,11 +41,39 @@ st.markdown(
         --sidebar-bg: #FFFFFF;
     }
 
-    /* Hide standard Streamlit chrome: hamburger menu, footer, header bar */
+    /* Hide standard Streamlit chrome: hamburger menu, footer, deploy toolbar.
+       IMPORTANT: we do NOT zero out or hide the header itself, because the
+       sidebar expand/collapse arrow lives inside it — doing so was the cause
+       of the sidebar becoming permanently inaccessible on both desktop and
+       mobile. Only the menu/toolbar contents are hidden; the header stays
+       present (transparent) so its arrow control keeps working. */
     #MainMenu { visibility: hidden; }
     footer { visibility: hidden; }
-    header[data-testid="stHeader"] { background: transparent; height: 0; }
-    [data-testid="stToolbar"] { visibility: hidden; }
+    header[data-testid="stHeader"] { background: transparent !important; }
+    [data-testid="stToolbar"] { visibility: hidden; height: 0; }
+
+    /* The sidebar expand arrow (shown when the sidebar is collapsed) and the
+       collapse arrow (shown when it's open) use different data-testids across
+       Streamlit versions — style both explicitly so the control is always
+       visible and legible on the light theme, on desktop and mobile alike. */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapsedControl"] {
+        visibility: visible !important;
+        display: flex !important;
+        opacity: 1 !important;
+        z-index: 999999 !important;
+    }
+    [data-testid="collapsedControl"] svg,
+    [data-testid="stSidebarCollapseButton"] svg,
+    [data-testid="stSidebarCollapsedControl"] svg {
+        fill: var(--text) !important;
+    }
+    [data-testid="collapsedControl"] button,
+    [data-testid="stSidebarCollapseButton"] button {
+        visibility: visible !important;
+        display: flex !important;
+    }
 
     .stApp, body, .main, [data-testid="stAppViewContainer"] { background-color: var(--bg) !important; }
     .main * { color: var(--text); }
@@ -60,17 +92,24 @@ st.markdown(
     [data-testid="stSidebar"] { background-color: var(--sidebar-bg) !important; border-right: 1px solid var(--border); }
     [data-testid="stSidebar"] * { color: var(--text) !important; }
     [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * { color: var(--text-secondary) !important; }
-    [data-testid="stSidebar"] .stButton > button { background-color: #FFFFFF !important; border: 1px solid var(--border) !important; color: var(--text) !important; }
+    [data-testid="stSidebar"] .stButton > button { background-color: #FFFFFF !important; border: 1.5px solid #CBD5E1 !important; color: var(--text) !important; }
     [data-testid="stSidebar"] .stButton > button:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
     [data-testid="stSidebar"] .stTextInput input { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; }
-    [data-testid="stSidebar"] .stProgress > div > div { background-color: var(--accent) !important; }
-    [data-testid="stSidebar"] .stProgress { background-color: var(--border) !important; border-radius: 4px; }
+    [data-testid="stSidebar"] [data-testid="stProgress"] { background-color: transparent !important; }
+    [data-testid="stSidebar"] [data-testid="stProgress"] > div { background-color: var(--border) !important; border-radius: 4px; overflow: hidden; }
+    [data-testid="stSidebar"] [data-testid="stProgress"] [role="progressbar"] { background-color: var(--accent) !important; }
 
     .stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid var(--border); }
     .stTabs [data-baseweb="tab"] { color: var(--text-secondary) !important; font-weight: 600; }
     .stTabs [aria-selected="true"] { color: var(--accent) !important; border-bottom-color: var(--accent) !important; }
 
     .stTextArea textarea { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 8px; font-size: 14.5px; padding: 12px 14px !important; }
+    /* Hide Streamlit's "Press Ctrl+Enter to apply" / "Press Enter to apply"
+       hint that appears under text inputs while typing — covers the testid
+       used in current versions plus older fallback class names. */
+    [data-testid="InputInstructions"] { display: none !important; visibility: hidden !important; }
+    [data-testid="stTextAreaInstructions"] { display: none !important; visibility: hidden !important; }
+    [data-testid="stWidgetInstructions"] { display: none !important; visibility: hidden !important; }
     .stTextArea textarea:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(37,99,235,0.15) !important; }
     .stTextArea textarea::placeholder { color: #94A3B8 !important; }
     .stTextInput input { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 6px; }
@@ -100,25 +139,28 @@ st.markdown(
 
     /* Buttons — solid colors, no gradients */
     .stButton > button, .stButton > button * { color: var(--text) !important; }
-    .stButton > button { background-color: #FFFFFF !important; border: 1px solid var(--border) !important; border-radius: 8px !important; font-weight: 500; transition: all 0.15s ease; }
+    .stButton > button { background-color: #FFFFFF !important; border: 1.5px solid #CBD5E1 !important; border-radius: 8px !important; font-weight: 500; transition: all 0.15s ease; }
     .stButton > button:hover, .stButton > button:hover * { color: var(--accent) !important; }
     .stButton > button:hover { border-color: var(--accent) !important; }
     .stButton > button[kind="primary"], .stButton > button[kind="primary"] * { color: #FFFFFF !important; }
     .stButton > button[kind="primary"] {
         background-color: var(--accent) !important;
-        border-color: var(--accent) !important;
+        border: 1.5px solid var(--accent-hover) !important;
         font-weight: 700 !important;
         box-shadow: 0 2px 6px rgba(37,99,235,0.25);
     }
     .stButton > button[kind="primary"]:hover, .stButton > button[kind="primary"]:hover * { color: #FFFFFF !important; }
     .stButton > button[kind="primary"]:hover {
         background-color: var(--accent-hover) !important;
+        border-color: #1E40AF !important;
         box-shadow: 0 4px 10px rgba(37,99,235,0.35);
         transform: translateY(-1px);
     }
 
     .stRadio label, .stCheckbox label { color: var(--text) !important; }
-    .stProgress > div > div { background-color: var(--accent) !important; }
+    [data-testid="stProgress"] { background-color: transparent !important; }
+    [data-testid="stProgress"] > div { background-color: #E2E8F0 !important; border-radius: 4px; overflow: hidden; }
+    [data-testid="stProgress"] [role="progressbar"] { background-color: var(--accent) !important; }
 
     /* ---- Write90 brand elements — solid color, no gradients ---- */
     .w90-banner {
@@ -190,6 +232,77 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+def inject_sidebar_toggle():
+    """A permanent, self-built toggle button pinned to the top-left corner of
+    the screen (desktop and mobile). Streamlit's own collapse/expand control
+    has changed data-testid names across versions (collapsedControl in older
+    releases, stSidebarCollapseButton in 1.38+, etc.), so a pure-CSS fix can
+    silently stop working after a Streamlit upgrade. This button doesn't
+    guess a single name — it searches a list of known selectors for
+    Streamlit's native control and clicks it directly, with a manual
+    show/hide fallback if none are found. It only injects itself once per
+    page load, so it's safe to call on every rerun."""
+    components.html(
+        """
+        <script>
+        (function() {
+            try {
+                var doc = window.parent.document;
+                if (doc.getElementById('write90-sidebar-toggle')) return;
+
+                var btn = doc.createElement('button');
+                btn.id = 'write90-sidebar-toggle';
+                btn.innerHTML = '&#9776;';
+                btn.title = 'Show/hide menu';
+                btn.style.cssText = [
+                    'position:fixed', 'top:12px', 'left:12px', 'z-index:2147483647',
+                    'background:#2563EB', 'color:#FFFFFF', 'border:none',
+                    'border-radius:8px', 'width:38px', 'height:38px',
+                    'font-size:18px', 'line-height:1', 'cursor:pointer',
+                    'box-shadow:0 2px 8px rgba(0,0,0,0.3)', 'display:flex',
+                    'align-items:center', 'justify-content:center'
+                ].join(';');
+                doc.body.appendChild(btn);
+
+                function findNativeToggle() {
+                    var selectors = [
+                        '[data-testid="stSidebarCollapseButton"] button',
+                        '[data-testid="stSidebarCollapseButton"]',
+                        '[data-testid="collapsedControl"] button',
+                        '[data-testid="collapsedControl"]',
+                        '[data-testid="stSidebarCollapsedControl"] button',
+                        '[data-testid="stSidebarCollapsedControl"]',
+                        'header[data-testid="stHeader"] button'
+                    ];
+                    for (var i = 0; i < selectors.length; i++) {
+                        var el = doc.querySelector(selectors[i]);
+                        if (el) return el;
+                    }
+                    return null;
+                }
+
+                btn.addEventListener('click', function() {
+                    var native = findNativeToggle();
+                    if (native) {
+                        native.click();
+                        return;
+                    }
+                    // Last-resort fallback: flip the sidebar's own visibility
+                    // directly if no known native control could be found.
+                    var sidebar = doc.querySelector('[data-testid="stSidebar"]');
+                    if (sidebar) {
+                        var hidden = sidebar.style.display === 'none';
+                        sidebar.style.display = hidden ? '' : 'none';
+                    }
+                });
+            } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 
 def render_top_banner():
@@ -280,6 +393,41 @@ SWT_PASSAGES = [
     "Sleep researchers have found that chronic sleep deprivation is associated with a wide range of negative health outcomes, including impaired memory, weakened immune function, and increased risk of cardiovascular disease. Despite this evidence, modern lifestyles characterized by long working hours, late-night screen use, and irregular schedules continue to erode average sleep duration in many industrialized countries. Some employers have begun experimenting with flexible start times and nap facilities in response to growing awareness of sleep's role in productivity and wellbeing, though such initiatives remain far from universal across industries.",
     "Financial literacy, the ability to understand and effectively use various financial skills such as budgeting and investing, remains uneven across populations despite its growing importance in an increasingly complex economic environment. Studies have shown that individuals with stronger financial literacy tend to save more, carry less high-interest debt, and plan more effectively for retirement. In response, some education systems have begun incorporating personal finance education into secondary school curricula, though critics argue that such programs are often too brief or theoretical to meaningfully change long-term financial behavior.",
     "Space exploration has entered a new era characterized by increasing involvement from private companies alongside traditional government space agencies. This shift has substantially reduced the cost of launching satellites and cargo, enabling more frequent missions and opening possibilities for commercial activities such as space tourism and asteroid mining. Critics caution that the growing number of private launches raises concerns about space debris and regulatory oversight, as no single international body currently has comprehensive authority over commercial space activity. Proponents counter that competition among private firms has accelerated innovation at a pace government agencies alone could not match.",
+    "Antibiotic resistance has emerged as one of the most pressing challenges in modern medicine, driven by decades of overuse and misuse of antibiotics in both healthcare and agriculture. Bacteria that survive exposure to these drugs can pass resistant traits to future generations, gradually rendering once-effective treatments useless. Public health officials warn that without coordinated global action to reduce unnecessary prescriptions and develop new classes of antibiotics, routine infections and surgical procedures could become significantly more dangerous within a generation.",
+    "The gig economy, characterized by short-term contracts and freelance work facilitated by digital platforms, has expanded rapidly over the past fifteen years. Supporters argue it offers workers greater flexibility and access to income opportunities that traditional employment structures do not provide. Critics counter that gig workers often lack the job security, benefits, and legal protections afforded to full-time employees, creating a growing segment of the workforce vulnerable to economic instability. Several jurisdictions have begun experimenting with new classifications of employment to address this gap.",
+    "Coral reefs, though covering less than one percent of the ocean floor, support roughly a quarter of all marine species, making them among the most biodiverse ecosystems on the planet. Rising ocean temperatures have triggered widespread coral bleaching events, in which corals expel the algae that provide them with nutrients and color, often leading to mass die-offs if conditions do not improve quickly. Marine biologists are experimenting with heat-resistant coral strains in an effort to preserve reef ecosystems as ocean temperatures continue to rise.",
+    "Microplastics, tiny fragments of plastic less than five millimeters in size, have been detected in nearly every corner of the globe, from remote mountain snow to deep ocean trenches. These particles originate from the breakdown of larger plastic waste as well as from products such as synthetic clothing fibers and cosmetic microbeads. Although research into the health effects of microplastic ingestion in humans is still in its early stages, scientists have already documented their presence in human blood and organ tissue, prompting calls for stricter regulation of plastic production and waste management.",
+    "Telemedicine, the practice of providing clinical healthcare remotely through video calls and digital monitoring tools, expanded dramatically in the wake of global health disruptions and has continued to grow since. Advocates highlight its potential to improve healthcare access in rural and underserved areas where specialists are scarce, while critics note limitations in diagnosing conditions that require physical examination or specialized equipment. Many healthcare systems have settled on hybrid models that combine remote consultations for routine matters with in-person visits reserved for more complex cases.",
+    "The concept of a four-day work week has gained traction among employers and policymakers seeking to improve worker wellbeing without sacrificing productivity. Pilot programs conducted across several industries have generally reported that employees maintain or even increase their output when given a shorter working week, attributing this to reduced burnout and improved focus during working hours. Skeptics caution that the model may not translate easily to sectors requiring continuous staffing, such as healthcare and manufacturing, where reducing hours could necessitate costly increases in hiring.",
+    "Vertical farming, the practice of growing crops in stacked layers within controlled indoor environments, has been proposed as a solution to the challenges of feeding a growing urban population with limited arable land. These systems use significantly less water than traditional agriculture and can operate year-round regardless of external weather conditions, but the high energy costs associated with artificial lighting and climate control have so far limited the technology's profitability outside of high-value crops such as leafy greens and herbs.",
+    "Digital privacy has become an increasingly contentious issue as companies collect vast amounts of personal data to power targeted advertising and personalized services. Consumer advocates argue that current regulations have not kept pace with the scale and sophistication of modern data collection practices, leaving individuals with limited meaningful control over how their information is used. Some governments have introduced stricter data protection laws requiring explicit consent and greater transparency, though enforcement across international borders remains a persistent challenge.",
+    "The rise of electric vehicles has prompted significant investment in charging infrastructure, though availability remains uneven between urban and rural areas. While city dwellers increasingly have access to public charging stations, drivers in more remote regions often face long detours to find a compatible charger, a factor that continues to discourage adoption outside metropolitan centers. Automakers and governments alike have pledged substantial funding toward expanding charging networks, aiming to eliminate this disparity within the next decade.",
+    "Museums around the world are increasingly using augmented reality technology to enhance visitor engagement, allowing patrons to view historical reconstructions or additional context simply by pointing a smartphone at an exhibit. Early studies suggest that these tools can meaningfully improve information retention among younger visitors, though some curators worry that an overreliance on digital enhancement may distract from the direct experience of viewing original artifacts and artworks.",
+    "Water scarcity is projected to affect an increasing share of the global population as climate change alters precipitation patterns and population growth strains existing supplies, particularly in arid and semi-arid regions. Engineers have proposed a range of solutions, from large-scale desalination plants to more efficient irrigation techniques, but the high energy costs and infrastructure investment required mean that many of the most affected regions remain the least equipped to implement these technologies at scale.",
+    "The popularity of plant-based diets has grown substantially in recent years, driven by concerns about environmental sustainability, animal welfare, and personal health. Food manufacturers have responded by developing an expanding range of meat and dairy alternatives designed to replicate the taste and texture of traditional animal products. Nutritionists generally agree that well-planned plant-based diets can meet all necessary dietary requirements, though they caution that highly processed plant-based substitutes are not automatically healthier than the animal products they replace.",
+]
+
+DICTATION_SENTENCES = [
+    "The committee will announce its final decision next Monday morning.",
+    "Researchers discovered a new species of frog in the rainforest.",
+    "Please submit your application before the end of the month.",
+    "The museum's new exhibit attracted thousands of visitors last week.",
+    "Scientists warn that the glacier is melting faster than expected.",
+    "The company plans to open three new offices next year.",
+    "Local farmers rely heavily on rainfall during the growing season.",
+    "The library extended its opening hours for exam preparation week.",
+    "Volunteers spent the weekend cleaning up the coastal shoreline.",
+    "The professor postponed the lecture due to a scheduling conflict.",
+    "Air pollution levels dropped significantly during the public holiday.",
+    "The airline canceled several flights because of the severe storm.",
+    "Her research paper was published in an international journal.",
+    "The government introduced new regulations to protect small businesses.",
+    "Engineers tested the bridge's structural integrity before it opened.",
+    "The city council approved funding for a new public park.",
+    "Students must register for the exam by the given deadline.",
+    "The documentary explores the history of ancient trade routes.",
+    "A sudden power outage delayed the start of the concert.",
+    "The hospital introduced a new system for scheduling appointments.",
 ]
 
 
@@ -417,11 +565,19 @@ Spelling (0-2): 2 = correct spelling. 1 = one spelling error. 0 = more than one 
 
 Convert the raw total (max 12) to a scaled practice score out of 90, proportionally: 10-12/12 is high 80s-90, 8-9/12 is 60s-70s, 4-7/12 is 40s-50s, cascaded zero is 10-20. This is a simplified per-response practice estimate, not the official multi-question overall PTE score.""",
     },
+    "dictation": {
+        "label": "Write From Dictation",
+        "response_label": "Type exactly what you hear",
+        "response_placeholder": "Listen carefully, then type the sentence exactly as you heard it...",
+        "time_limit_min": 1,
+        "no_llm": True,
+    },
 }
 
 for _cfg in TASK_CONFIGS.values():
-    _cfg["max_raw"] = sum(m for _, _, m in _cfg["criteria"])
-    _cfg["system_prompt"] = _cfg["rubric"] + "\n" + COMMON_TAIL
+    if "criteria" in _cfg:
+        _cfg["max_raw"] = sum(m for _, _, m in _cfg["criteria"])
+        _cfg["system_prompt"] = _cfg["rubric"] + "\n" + COMMON_TAIL
 
 
 # ---------------------------------------------------------------------------
@@ -459,27 +615,162 @@ def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-def create_user(conn, username: str, password: str):
-    """Returns (success, error). error is None on success, 'duplicate' if the
-    username is genuinely taken, or the raw error string for anything else
-    (permissions, missing table, etc.) so it isn't misreported as 'taken'."""
+def is_valid_email(email: str) -> bool:
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email or ""))
+
+
+def generate_verification_code() -> str:
+    return f"{secrets.randbelow(1000000):06d}"
+
+
+def send_verification_email(to_email: str, code: str):
+    """Sends a 6-digit verification code by email using standard SMTP.
+    Returns (success, error). Requires SMTP_HOST/PORT/USER/PASSWORD in
+    secrets — see the setup guide. Works with any SMTP provider (Gmail
+    with an app password, SendGrid, Resend's SMTP relay, your own mail
+    server, etc.), so there's no vendor lock-in to a specific email API."""
+    host = st.secrets.get("SMTP_HOST", "").strip()
+    port = int(st.secrets.get("SMTP_PORT", 587))
+    user = st.secrets.get("SMTP_USER", "").strip()
+    password = st.secrets.get("SMTP_PASSWORD", "").strip()
+    from_addr = st.secrets.get("SMTP_FROM", "").strip() or user
+
+    if not host or not user or not password:
+        return False, (
+            "Email isn't configured yet. Add SMTP_HOST, SMTP_PORT, SMTP_USER, "
+            "SMTP_PASSWORD (and optionally SMTP_FROM) to your app's secrets."
+        )
+
+    msg = MIMEText(
+        f"Your {APP_NAME} verification code is: {code}\n\n"
+        f"This code expires in 10 minutes. If you didn't request this, you can ignore this email."
+    )
+    msg["Subject"] = f"{APP_NAME} verification code: {code}"
+    msg["From"] = from_addr
+    msg["To"] = to_email
+
     try:
-        conn.table("users").insert({"username": username, "password_hash": hash_pw(password)}).execute()
+        if port == 465:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(host, port, context=context, timeout=15) as server:
+                server.login(user, password)
+                server.sendmail(from_addr, [to_email], msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=15) as server:
+                server.starttls(context=ssl.create_default_context())
+                server.login(user, password)
+                server.sendmail(from_addr, [to_email], msg.as_string())
         return True, None
     except Exception as e:
-        msg = str(e)
-        if "duplicate key" in msg.lower() or "23505" in msg or "already exists" in msg.lower():
-            return False, "duplicate"
-        return False, msg
+        return False, str(e)
 
 
-def verify_user(conn, username: str, password: str) -> bool:
+def upsert_pending_signup(conn, username: str, email: str, password: str):
+    """Starts (or restarts) a sign-up: stores the account as unverified with
+    a fresh code. Returns (ok, error, code). error is 'username_taken' if the
+    username belongs to an already-verified account, 'email_taken' if the
+    email belongs to a different already-verified account, or a raw string
+    for other database errors. Re-attempting a still-unverified username is
+    allowed (overwrites the pending code/password), so a failed or abandoned
+    signup doesn't permanently lock the username."""
     try:
-        res = conn.table("users").select("password_hash").eq("username", username).execute()
-    except Exception:
-        return False
+        existing = conn.table("users").select("username,email,email_verified").eq("username", username).execute()
+        rows = existing.data or []
+        if rows and rows[0].get("email_verified"):
+            return False, "username_taken", None
+
+        email_owner = conn.table("users").select("username,email_verified").eq("email", email).execute()
+        for row in (email_owner.data or []):
+            if row["username"] != username and row.get("email_verified"):
+                return False, "email_taken", None
+
+        code = generate_verification_code()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        payload = {
+            "username": username,
+            "email": email,
+            "password_hash": hash_pw(password),
+            "email_verified": False,
+            "verification_code": code,
+            "verification_expires_at": expires_at,
+        }
+        if rows:
+            conn.table("users").update(payload).eq("username", username).execute()
+        else:
+            conn.table("users").insert(payload).execute()
+        return True, None, code
+    except Exception as e:
+        return False, str(e), None
+
+
+def verify_signup_code(conn, username: str, code: str):
+    """Returns (ok, error). error in {'not_found','expired','mismatch'} or a
+    raw string for other database errors."""
+    try:
+        res = conn.table("users").select(
+            "verification_code,verification_expires_at,email_verified"
+        ).eq("username", username).execute()
+        rows = res.data or []
+        if not rows:
+            return False, "not_found"
+        row = rows[0]
+        if row.get("email_verified"):
+            return True, None
+        expires_at = row.get("verification_expires_at")
+        if expires_at:
+            try:
+                if datetime.now(timezone.utc) > datetime.fromisoformat(expires_at.replace("Z", "+00:00")):
+                    return False, "expired"
+            except ValueError:
+                pass
+        if row.get("verification_code") != code.strip():
+            return False, "mismatch"
+        conn.table("users").update({
+            "email_verified": True,
+            "verification_code": None,
+            "verification_expires_at": None,
+        }).eq("username", username).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def resend_verification_code(conn, username: str):
+    """Returns (ok, error, email)."""
+    try:
+        res = conn.table("users").select("email,email_verified").eq("username", username).execute()
+        rows = res.data or []
+        if not rows:
+            return False, "not_found", None
+        if rows[0].get("email_verified"):
+            return True, None, rows[0]["email"]
+        email = rows[0]["email"]
+        code = generate_verification_code()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        conn.table("users").update({
+            "verification_code": code,
+            "verification_expires_at": expires_at,
+        }).eq("username", username).execute()
+        ok, err = send_verification_email(email, code)
+        if not ok:
+            return False, err, email
+        return True, None, email
+    except Exception as e:
+        return False, str(e), None
+
+
+def verify_user(conn, username: str, password: str):
+    """Returns (status, error). status is 'ok', 'unverified', or 'invalid'."""
+    try:
+        res = conn.table("users").select("password_hash,email_verified").eq("username", username).execute()
+    except Exception as e:
+        return "error", str(e)
     rows = res.data or []
-    return bool(rows) and rows[0]["password_hash"] == hash_pw(password)
+    if not rows or rows[0]["password_hash"] != hash_pw(password):
+        return "invalid", None
+    if not rows[0].get("email_verified"):
+        return "unverified", None
+    return "ok", None
 
 
 def create_session(conn, username: str) -> str:
@@ -502,6 +793,68 @@ def delete_session(conn, token: str):
         conn.table("sessions").delete().eq("token", token).execute()
     except Exception:
         pass
+
+
+def set_session_cookie(token: str):
+    """Persists login across a page refresh using a browser cookie scoped to
+    this device only — never the URL. A cookie isn't part of a link you'd
+    copy and share, so this restores login on refresh without the leak the
+    old URL-token approach had."""
+    max_age = 60 * 60 * 24 * 30  # 30 days
+    components.html(
+        f"""
+        <script>
+        try {{
+            window.parent.document.cookie =
+                "write90_session={token}; path=/; max-age={max_age}; samesite=Lax";
+        }} catch (e) {{}}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def clear_session_cookie():
+    components.html(
+        """
+        <script>
+        try {
+            window.parent.document.cookie = "write90_session=; path=/; max-age=0";
+        } catch (e) {}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def try_restore_session_from_cookie():
+    """If no one is logged in and the URL doesn't already carry a restore
+    token, ask the browser for the write90_session cookie. If found, it
+    briefly appends the token to the URL (replacing the current history
+    entry, not adding a new one) so this Python script can read it via
+    st.query_params on the next run — then the token is stripped from the
+    URL again immediately after restoring, so it never sits there to be
+    copied and shared."""
+    components.html(
+        """
+        <script>
+        (function() {
+            try {
+                var doc = window.parent.document;
+                var params = new URLSearchParams(window.parent.location.search);
+                if (params.has('t')) return;
+                var match = doc.cookie.match(/(?:^|; )write90_session=([^;]*)/);
+                if (!match) return;
+                var token = decodeURIComponent(match[1]);
+                var url = new URL(window.parent.location.href);
+                url.searchParams.set('t', token);
+                window.parent.location.replace(url.toString());
+            } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 
 def save_submission(conn, username: str, task_key: str, context_text: str, response_text: str, result: dict):
@@ -630,6 +983,54 @@ TIP_LIBRARY = {
     "spelling": "Pick one English variant (US or UK) and use it consistently — mixing color/colour or organize/organise costs points.",
 }
 
+# ---------------------------------------------------------------------------
+# Study Tips — curated, high-leverage advice per task, aimed at the specific
+# scoring traits Pearson grades on. Static reference content, not generated.
+# ---------------------------------------------------------------------------
+STUDY_TIPS = {
+    "essay": [
+        "Nail Form first — it's the easiest 2 points on the whole test. Land between 220–290 words so a slightly long or short count never tips you out of the 200–300 range.",
+        "Use a simple, reliable structure: intro (paraphrase the prompt + state your position), two body paragraphs (one idea each, with an example), a short conclusion restating your stance. Examiners reward this predictability under Development & Coherence.",
+        "If the prompt has two parts (\"discuss both views and give your opinion\"), address both explicitly and give equal space to each — a lopsided essay loses Content points even if the writing is strong.",
+        "Vary your connectives. Rotate through however, moreover, consequently, nevertheless, in contrast, as a result, rather than repeating and/but/also — this alone moves the needle on General Linguistic Range.",
+        "Mix sentence types deliberately: include at least one complex sentence (with a subordinate clause) and one conditional per paragraph, alongside simpler ones — pure simple sentences cap your Linguistic Range score.",
+        "Save your last 2 minutes purely for proofreading subject-verb agreement, articles (a/an/the), and spelling — these small slips are the single most common way a strong essay loses points.",
+        "Pick US or UK spelling and stick to it for the entire response — mixing color/colour or organize/organise triggers a Spelling deduction even if every individual word is spelled correctly.",
+        "Use topic-relevant academic vocabulary, but only words you're confident using correctly — one badly-used \"impressive\" word does more damage than a well-used simple one.",
+    ],
+    "swt": [
+        "It must be ONE sentence — no full stop until the very end. Use semicolons, colons, or subordinate clauses (while, although, which) to link ideas instead of starting a new sentence.",
+        "Stay inside 5–75 words, but aim for 30–40 — long enough to capture the main idea and a key supporting point, short enough to stay tightly synthesized.",
+        "Identify the passage's single main idea first, then ask what one supporting detail is essential to it. Trying to include everything usually produces a disconnected, low-coherence sentence.",
+        "Paraphrase rather than lifting phrases directly from the passage — reusing the source's exact wording caps your Content score even if the sentence is accurate.",
+        "Skip the throat-clearing. Don't open with \"This passage talks about\" or \"The passage is about\" — go straight into the content in your own words; every word here should be doing work.",
+        "Read your sentence back once before submitting and check it's grammatically one sentence — if you can put a full stop anywhere in the middle and it still makes sense, restructure it.",
+    ],
+    "sst": [
+        "Take notes while listening — you won't see the transcript at any point, so jot keywords, numbers, and cause/effect signal words (however, as a result, in contrast) as you hear them.",
+        "Target 50–70 words in a single paragraph, no bullet points or line breaks — Form drops a full point outside 40–100 words.",
+        "Capture the lecture's overall argument plus 2–3 supporting points, not every detail — an overstuffed summary usually loses coherence and clarity faster than it gains content.",
+        "Write your summary as connected sentences, not a list of notes strung together — examiners are explicitly checking that ideas are synthesized, not just captured.",
+        "If you missed a specific number or name, don't guess wildly — describe it generally (\"a significant increase\") rather than inventing a wrong detail, which reads as a comprehension error.",
+        "Reread your response once before time is up to confirm it reads as one coherent paragraph summarizing the whole talk, not just the opening or closing lines.",
+    ],
+    "dictation": [
+        "Listen for the sentence's core structure first (subject–verb–object), then reconstruct modifiers and connecting words afterward from memory.",
+        "You typically hear it only once — resist the urge to write while still listening. Listen fully, then write immediately after from memory.",
+        "Small function words (a, the, of, in, that) are the most commonly dropped words — proofread specifically for these once you've typed the sentence.",
+        "Word order matters as much as word choice — read your typed sentence back and check it flows the way natural English would, not just that the words are all present.",
+        "Practice with unfamiliar collocations (\"structural integrity\", \"regulatory oversight\") since real dictation sentences often include one less-common phrase alongside simple ones.",
+        "If you're unsure of a word's spelling, write your best phonetic guess rather than skipping it — a wrong-but-present word can still register as partially correct; a gap never does.",
+    ],
+}
+
+STUDY_TIPS_GENERAL = [
+    "Across every task, the fastest points to lose are Form and Spelling — both are entirely within your control regardless of how strong your ideas are. Nail those first before polishing content.",
+    "Read the rubric criteria for each task type in the sidebar's Verification Guide before you attempt it — knowing exactly what's being scored changes how you write in real time.",
+    "Consistency beats brilliance. A 90 comes from reliably avoiding small errors across every response, not from occasional excellent responses mixed with weak ones.",
+    "Review your History tab regularly — the recurring weaknesses PTE examiners flag for you are far more useful to fix than chasing a single high score.",
+]
+
 
 # ---------------------------------------------------------------------------
 # Grading
@@ -708,73 +1109,6 @@ def score_badge(overall: int) -> str:
     return '<span class="pte-badge push">Room to grow</span>'
 
 
-def render_timer(minutes: int, key: str):
-    total_seconds = minutes * 60
-    components.html(
-        f"""
-        <div style="font-family:Inter,sans-serif;display:flex;align-items:center;gap:14px;
-             background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:10px 16px;">
-            <div id="clock_{key}" style="font-family:monospace;font-size:22px;font-weight:700;color:#0F172A;min-width:70px;">
-                {minutes:02d}:00
-            </div>
-            <div style="font-size:12px;color:#475569;flex:1;">Official PTE time limit for this task: {minutes} minutes</div>
-            <button id="startBtn_{key}" style="background:#2563EB;color:#FFFFFF;border:none;border-radius:6px;
-                padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px;">Start</button>
-            <button id="pauseBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
-                padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px;">Pause</button>
-            <button id="resetBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
-                padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px;">Reset</button>
-        </div>
-        <script>
-        (function() {{
-            let remaining_{key} = {total_seconds};
-            let timerId_{key} = null;
-            const clockEl = document.getElementById('clock_{key}');
-
-            function render() {{
-                const m = Math.floor(remaining_{key} / 60);
-                const s = remaining_{key} % 60;
-                clockEl.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
-                if (remaining_{key} <= 60) {{
-                    clockEl.style.color = '#B91C1C';
-                }} else if (remaining_{key} <= 180) {{
-                    clockEl.style.color = '#B45309';
-                }} else {{
-                    clockEl.style.color = '#0F172A';
-                }}
-            }}
-
-            document.getElementById('startBtn_{key}').onclick = function() {{
-                if (timerId_{key}) return;
-                timerId_{key} = setInterval(function() {{
-                    if (remaining_{key} > 0) {{
-                        remaining_{key} -= 1;
-                        render();
-                    }} else {{
-                        clockEl.textContent = "Time's up";
-                        clearInterval(timerId_{key});
-                        timerId_{key} = null;
-                    }}
-                }}, 1000);
-            }};
-            document.getElementById('pauseBtn_{key}').onclick = function() {{
-                clearInterval(timerId_{key});
-                timerId_{key} = null;
-            }};
-            document.getElementById('resetBtn_{key}').onclick = function() {{
-                clearInterval(timerId_{key});
-                timerId_{key} = null;
-                remaining_{key} = {total_seconds};
-                render();
-            }};
-            render();
-        }})();
-        </script>
-        """,
-        height=60,
-    )
-
-
 def render_timer(minutes: int, key: str, auto_start: bool = False):
     """A self-contained countdown timer matching the official PTE time limit
     for this task. Runs in the browser (JS), independent of Streamlit reruns,
@@ -797,6 +1131,8 @@ def render_timer(minutes: int, key: str, auto_start: bool = False):
         </div>
         <script>
         (function() {{
+            try {{ window.speechSynthesis.cancel(); }} catch (e) {{}}
+            try {{ window.parent.speechSynthesis.cancel(); }} catch (e) {{}}
             let remaining_{key} = {total_seconds};
             let interval_{key} = null;
             const clockEl = document.getElementById('clock_{key}');
@@ -836,26 +1172,193 @@ def render_timer(minutes: int, key: str, auto_start: bool = False):
     )
 
 
-def tts_button(text: str, key: str):
+def render_live_word_counter(counter_key: str, textarea_label: str, lo: int, hi: int, initial_text: str = ""):
+    """Renders a metric-stack box that updates on every keystroke, instead of
+    only after a Streamlit rerun (which for st.text_area normally only fires
+    once the field loses focus). This works by reaching into the parent page,
+    finding the actual <textarea> Streamlit rendered for this widget (matched
+    by its accessible label), and listening to its native 'input' event —
+    completely independent of Streamlit's own rerun cycle."""
+    initial_words = word_count(initial_text)
+    initial_chars = len(initial_text)
+    safe_label = json.dumps(textarea_label)
+    box_id = f"w90-livecount-{counter_key}"
+    st.markdown(
+        f'<div id="{box_id}" class="w90-metric-stack">'
+        f'METRIC STACK: {initial_words} WORDS | CHARACTER BLOCKS: {initial_chars}</div>',
+        unsafe_allow_html=True,
+    )
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const label_{counter_key} = {safe_label};
+            const lo_{counter_key} = {lo};
+            const hi_{counter_key} = {hi};
+            const boxId_{counter_key} = {json.dumps(box_id)};
+
+            function render(textarea) {{
+                const doc = window.parent.document;
+                const box = doc.getElementById(boxId_{counter_key});
+                if (!box) return;
+                const val = textarea.value || "";
+                const trimmed = val.trim();
+                const words = trimmed.length ? trimmed.split(/\\s+/).length : 0;
+                const chars = val.length;
+                const inRange = words > 0 && words >= lo_{counter_key} && words <= hi_{counter_key};
+                box.textContent = 'METRIC STACK: ' + words + ' WORDS | CHARACTER BLOCKS: ' + chars;
+                box.style.color = words === 0 ? '#475569' : (inRange ? '#15803D' : '#B45309');
+                box.style.borderColor = words === 0 ? '#E2E8F0' : (inRange ? '#15803D' : '#B45309');
+            }}
+
+            function attach() {{
+                const doc = window.parent.document;
+                const textarea = doc.querySelector('textarea[aria-label="' + label_{counter_key} + '"]');
+                if (!textarea) {{ setTimeout(attach, 150); return; }}
+                if (textarea.__write90WcHandler) {{
+                    textarea.removeEventListener('input', textarea.__write90WcHandler);
+                }}
+                const handler = function() {{ render(textarea); }};
+                textarea.__write90WcHandler = handler;
+                textarea.addEventListener('input', handler);
+                render(textarea);
+            }}
+            attach();
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
     safe_text = json.dumps(text)
+    safe_label = json.dumps(button_label)
     components.html(
         f"""
         <div style="font-family:Inter,sans-serif;">
         <button id="playBtn_{key}" style="background:#2563EB;color:#FFFFFF;border:1px solid #2563EB;border-radius:6px;
-            padding:10px 18px;font-weight:500;cursor:pointer;">Play lecture aloud</button>
+            padding:10px 18px;font-weight:500;cursor:pointer;"></button>
         <button id="stopBtn_{key}" style="background:#FFFFFF;color:#0F172A;border:1px solid #E2E8F0;border-radius:6px;
             padding:10px 18px;font-weight:500;cursor:pointer;margin-left:8px;">Stop</button>
+        <div id="voiceLabel_{key}" style="font-size:11px;color:#94A3B8;margin-top:6px;"></div>
         <script>
-        const text_{key} = {safe_text};
-        document.getElementById('playBtn_{key}').onclick = function() {{
-            window.speechSynthesis.cancel();
-            const u = new SpeechSynthesisUtterance(text_{key});
-            u.rate = 0.95;
-            window.speechSynthesis.speak(u);
-        }};
-        document.getElementById('stopBtn_{key}').onclick = function() {{
-            window.speechSynthesis.cancel();
-        }};
+        (function() {{
+            // Use the PARENT window's speech engine everywhere (voice list,
+            // speaking, and cancelling) rather than this iframe's own copy.
+            // Some browsers give an iframe a separate/emptier voice list than
+            // the top-level page, which silently forces a worse fallback
+            // voice even though better ones are actually installed.
+            const synth = window.parent.speechSynthesis;
+            const text_{key} = {safe_text};
+            document.getElementById('playBtn_{key}').textContent = {safe_label};
+
+            // Split into sentences so each one is spoken as its own utterance.
+            // Long single utterances tend to sound flatter and more monotone;
+            // short chained utterances let the engine reset intonation at
+            // each sentence boundary, which reads as noticeably more natural.
+            const sentences_{key} = text_{key}.match(/[^.!?]+[.!?]*/g) || [text_{key}];
+
+            // Names known to sound distinctly robotic/dated — actively
+            // avoided even if nothing better is found, since these are the
+            // most common cause of "still sounds robotic" complaints.
+            const AVOID_NAMES = /david desktop|zira desktop|mark desktop|espeak|compact|fred|whisper|junior|bells|bad news|boing|cellos|deranged|hysterical|pipe organ|trinoids|zarvox|bahh/i;
+
+            function pickVoice() {{
+                const voices = (synth.getVoices() || []).filter(v => !AVOID_NAMES.test(v.name));
+                if (!voices.length) return null;
+                const preferredNames = [
+                    "Microsoft Aria Online (Natural) - English (United States)",
+                    "Microsoft Ava Online (Natural) - English (United States)",
+                    "Microsoft Emma Online (Natural) - English (United States)",
+                    "Microsoft Guy Online (Natural) - English (United States)",
+                    "Google US English", "Google UK English Female", "Google UK English Male",
+                    "Samantha", "Karen", "Daniel", "Moira", "Tessa"
+                ];
+                for (const name of preferredNames) {{
+                    const v = voices.find(v => v.name === name);
+                    if (v) return v;
+                }}
+                // Voices flagged localService:false are almost always cloud/
+                // network voices (Google, Microsoft Natural, etc.) which sound
+                // dramatically less robotic than the offline OS default.
+                let v = voices.find(v => v.localService === false && /^en/i.test(v.lang));
+                if (v) return v;
+                v = voices.find(v => /Natural|Neural/i.test(v.name) && /^en/i.test(v.lang));
+                if (v) return v;
+                v = voices.find(v => /Google/i.test(v.name) && /^en/i.test(v.lang));
+                if (v) return v;
+                v = voices.find(v => /^en-US|^en_US/i.test(v.lang));
+                if (v) return v;
+                v = voices.find(v => /^en/i.test(v.lang));
+                return v || voices[0];
+            }}
+
+            let playToken_{key} = 0;
+
+            function speakQueue(voice, myToken) {{
+                let i = 0;
+                function next() {{
+                    if (myToken !== playToken_{key} || i >= sentences_{key}.length) return;
+                    const u = new SpeechSynthesisUtterance(sentences_{key}[i].trim());
+                    if (voice) {{ u.voice = voice; u.lang = voice.lang; }}
+                    u.rate = 0.94;
+                    u.pitch = 1.0;
+                    u.volume = 1;
+                    u.onend = function() {{ i += 1; next(); }};
+                    synth.speak(u);
+                }}
+                next();
+            }}
+
+            function speak() {{
+                synth.cancel();
+                playToken_{key} += 1;
+                const voice = pickVoice();
+                const label = document.getElementById('voiceLabel_{key}');
+                if (label) {{ label.textContent = voice ? ('Voice: ' + voice.name) : 'Voice: browser default'; }}
+                speakQueue(voice, playToken_{key});
+            }}
+
+            document.getElementById('playBtn_{key}').onclick = function() {{
+                if (synth.getVoices().length === 0) {{
+                    synth.onvoiceschanged = speak;
+                    // Fallback in case the event never fires on this browser.
+                    setTimeout(speak, 250);
+                }} else {{
+                    speak();
+                }}
+            }};
+            document.getElementById('stopBtn_{key}').onclick = function() {{
+                playToken_{key} += 1;
+                synth.cancel();
+            }};
+
+            // Stop playback automatically the moment the user clicks a tab
+            // (New attempt / History), a sidebar nav button, or navigates
+            // away — otherwise audio keeps playing under a different screen.
+            // Streamlit's own st.tabs switch is handled client-side without
+            // a script rerun, so this listener is attached on the parent
+            // document rather than relying on this component unmounting.
+            try {{
+                if (window.parent.__write90StopSpeechHandler) {{
+                    window.parent.document.removeEventListener(
+                        'click', window.parent.__write90StopSpeechHandler, true
+                    );
+                }}
+                const stopHandler = function(e) {{
+                    const target = e.target.closest && e.target.closest(
+                        '[role="tab"], [data-testid="stSidebar"] button, .stButton button'
+                    );
+                    if (target) {{
+                        playToken_{key} += 1;
+                        try {{ window.parent.speechSynthesis.cancel(); }} catch (err) {{}}
+                    }}
+                }};
+                window.parent.__write90StopSpeechHandler = stopHandler;
+                window.parent.document.addEventListener('click', stopHandler, true);
+            }} catch (err) {{}}
+        }})();
         </script>
         </div>
         """,
@@ -922,9 +1425,234 @@ def render_result(result: dict, task_key: str):
 
 
 # ---------------------------------------------------------------------------
+# Write From Dictation — scored locally (no LLM call needed) by diffing the
+# typed response against the original sentence at the word level.
+# ---------------------------------------------------------------------------
+def _extract_words(text: str) -> list:
+    return re.findall(r"[A-Za-z']+", text or "")
+
+
+def compute_dictation_result(original: str, response: str) -> dict:
+    orig_words = _extract_words(original)
+    resp_words = _extract_words(response)
+    orig_norm = [w.lower() for w in orig_words]
+    resp_norm = [w.lower() for w in resp_words]
+
+    matcher = difflib.SequenceMatcher(None, orig_norm, resp_norm)
+    orig_display, resp_display = [], []
+    matched = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            matched += (i2 - i1)
+            for k in range(i1, i2):
+                orig_display.append({"word": orig_words[k], "status": "correct"})
+            for k in range(j1, j2):
+                resp_display.append({"word": resp_words[k], "status": "correct"})
+        elif tag == "replace":
+            for k in range(i1, i2):
+                orig_display.append({"word": orig_words[k], "status": "missing"})
+            for k in range(j1, j2):
+                resp_display.append({"word": resp_words[k], "status": "wrong"})
+        elif tag == "delete":
+            for k in range(i1, i2):
+                orig_display.append({"word": orig_words[k], "status": "missing"})
+        elif tag == "insert":
+            for k in range(j1, j2):
+                resp_display.append({"word": resp_words[k], "status": "extra"})
+
+    total = len(orig_words)
+    accuracy = (matched / total) if total else 0
+    overall = max(0, min(90, round(accuracy * 90)))
+    return {
+        "overall": overall,
+        "matched": matched,
+        "total": total,
+        "orig_display": orig_display,
+        "resp_display": resp_display,
+    }
+
+
+def render_dictation_result(result: dict):
+    overall = result.get("overall", 0)
+    matched = result.get("matched", 0)
+    total = result.get("total", 0)
+    pct = round(matched / total * 100) if total else 0
+
+    st.markdown(
+        f'<div class="pte-score-box"><span class="num">{overall}</span><br>'
+        f'<span class="of90">out of 90</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(f'<div style="text-align:center;">{score_badge(overall)}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<p class="pte-summary">You correctly placed {matched} of {total} words ({pct}% word accuracy).</p>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("---")
+    st.subheader("Correct sentence")
+    parts = []
+    for item in result.get("orig_display", []):
+        cls = "ok-text" if item["status"] == "correct" else "orig-bad"
+        parts.append(f'<span class="{cls}">{esc(item["word"])}</span>')
+    st.markdown(f'<div class="pte-corrected-box">{" ".join(parts)}</div>', unsafe_allow_html=True)
+    st.caption("Struck-through words are ones you missed or got wrong.")
+
+    st.subheader("What you typed")
+    parts2 = []
+    for item in result.get("resp_display", []):
+        cls = "ok-text" if item["status"] == "correct" else "orig-bad"
+        parts2.append(f'<span class="{cls}">{esc(item["word"])}</span>')
+    st.markdown(f'<div class="pte-corrected-box">{" ".join(parts2) if parts2 else "(no words typed)"}</div>', unsafe_allow_html=True)
+    st.caption("Red words were incorrect, out of place, or extra.")
+
+
+def render_dictation_section(cfg: dict, conn):
+    bank = DICTATION_SENTENCES
+    idx_key = "bank_idx_dictation"
+    if idx_key not in st.session_state:
+        st.session_state[idx_key] = 0
+    st.session_state[idx_key] %= len(bank)
+    current_idx = st.session_state[idx_key]
+    sentence = bank[current_idx]
+
+    sub_new, sub_history = st.tabs(["New attempt", "History"])
+
+    with sub_new:
+        left, right = st.columns([2.3, 1])
+
+        with left:
+            render_timer(cfg["time_limit_min"], key=f"dictation_{current_idx}", auto_start=False)
+            st.write("")
+
+            nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 3])
+            with nav_col1:
+                if st.button("Previous", key="prev_dictation", use_container_width=True):
+                    st.session_state[idx_key] = (current_idx - 1) % len(bank)
+                    st.rerun()
+            with nav_col2:
+                if st.button("Next", key="next_dictation", use_container_width=True):
+                    st.session_state[idx_key] = (current_idx + 1) % len(bank)
+                    st.rerun()
+            with nav_col3:
+                st.caption(f"Sentence {current_idx + 1} of {len(bank)}")
+
+            st.markdown("**Listen, then type exactly what you hear**")
+            tts_button(sentence, key=f"dictation_{current_idx}", button_label="Play sentence")
+            st.caption("On the real exam you hear it once — replay as much as you like while practicing.")
+
+            response_text = st.text_area(
+                cfg["response_label"],
+                height=100,
+                placeholder=cfg["response_placeholder"],
+                key=f"resp_dictation_{current_idx}",
+            )
+            submit = st.button(
+                "Check My Sentence",
+                type="primary",
+                key=f"submit_dictation_{current_idx}",
+                disabled=not response_text.strip(),
+            )
+
+        with right:
+            st.markdown(
+                '<div class="w90-guide-box"><h4>Verification Guide</h4>'
+                '<div class="w90-guide-item"><b>Word accuracy</b> — every correctly placed word counts toward your score.</div>'
+                '<div class="w90-guide-item"><b>Spelling</b> — try to match each word exactly.</div>'
+                '<div class="w90-guide-item"><b>Word order</b> — words must appear in the right position in the sentence.</div>'
+                '<div style="font-size:11.5px;color:#1E3A8A;margin-top:10px;padding-top:8px;'
+                'border-top:1px solid #BFDBFE;">Scored locally by comparing your response to the '
+                'original sentence word-for-word — no API call needed.</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("---")
+        if not response_text.strip():
+            st.info("Play the sentence, type what you heard, then click **Check My Sentence**.")
+        elif submit:
+            result = compute_dictation_result(sentence, response_text)
+            save_submission(conn, st.session_state["user"], "dictation", sentence, response_text, result)
+            render_dictation_result(result)
+        else:
+            st.info("Click **Check My Sentence** to see your score.")
+
+    with sub_history:
+        history = get_history(conn, st.session_state["user"], "dictation")
+        if not history:
+            st.info("No attempts yet. Your history for this task will appear here.")
+        else:
+            scores = [row[3] for row in history][::-1]
+            if len(scores) > 1:
+                fixed_score_chart(scores)
+            for created_at, hcontext, hresponse, hoverall, hresult_json in history:
+                with st.expander(f"{created_at[:16].replace('T',' ')} — Score: {hoverall}/90"):
+                    if hcontext:
+                        st.caption(f"Correct sentence: {hcontext}")
+                    st.write(hresponse)
+                    try:
+                        render_dictation_result(json.loads(hresult_json))
+                    except Exception:
+                        st.write("(Could not load detailed breakdown for this entry.)")
+
+
+@st.dialog("Write Your Own Essay")
+def custom_essay_dialog():
+    cfg = TASK_CONFIGS["essay"]
+    lo, hi = cfg["word_range"]
+
+    custom_question = st.text_area(
+        "Your essay question",
+        height=100,
+        placeholder="Paste or write any essay prompt here...",
+        key="custom_essay_question",
+    )
+    custom_response = st.text_area(
+        "Your essay (custom prompt)",
+        height=420,
+        placeholder="Write or paste your 200–300 word essay here...",
+        key="custom_essay_response",
+    )
+    render_live_word_counter(
+        counter_key="custom_essay",
+        textarea_label="Your essay (custom prompt)",
+        lo=lo, hi=hi,
+        initial_text=custom_response,
+    )
+    st.caption(cfg["word_hint"])
+
+    submit = st.button(
+        "Mark My Response Against Rubric",
+        type="primary",
+        disabled=not (custom_question.strip() and custom_response.strip()),
+    )
+    if submit:
+        if not api_key:
+            st.error("Enter your Anthropic API key in the sidebar first.")
+        elif get_usage_count(conn, st.session_state["user"]) >= DAILY_LIMIT:
+            st.error(f"Daily limit of {DAILY_LIMIT} responses reached. Please try again tomorrow.")
+        else:
+            with st.spinner("Marking carefully against the official rubric… this can take a little while."):
+                try:
+                    wc = word_count(custom_response)
+                    result = call_claude(api_key, "essay", custom_question, custom_response, wc)
+                    bump_usage_count(conn, st.session_state["user"])
+                    save_submission(conn, st.session_state["user"], "essay", custom_question, custom_response, result)
+                    render_result(result, "essay")
+                except GradingError as e:
+                    st.error("The examiner's response didn't come back in a readable format. Please try again.")
+                    with st.expander("Technical details"):
+                        st.code(e.raw_text[-2000:] if e.raw_text else str(e))
+                except Exception as e:
+                    st.error(f"Something went wrong marking your response: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Auth gate
 # ---------------------------------------------------------------------------
 conn = get_db()
+
+inject_sidebar_toggle()
 
 healthy, health_error = db_healthy(conn)
 if not healthy:
@@ -942,63 +1670,123 @@ if not healthy:
 if "user" not in st.session_state:
     st.session_state["user"] = None
 
-# Restore login after a page refresh using a session token stored in the URL.
+# Restore login on refresh from a browser cookie (device-local, never part
+# of a shareable URL) rather than the old URL-token approach. The cookie
+# read happens client-side; if found, the token briefly lands in the URL
+# (replacing, not adding, the current history entry) purely so this script
+# can read it once via st.query_params — then it's stripped again below so
+# it never sits in the address bar to be copied and shared.
 if not st.session_state["user"]:
-    token = st.query_params.get("t")
-    if token:
-        restored_user = get_session_user(conn, token)
+    restore_token = st.query_params.get("t")
+    if restore_token:
+        restored_user = get_session_user(conn, restore_token)
         if restored_user:
             st.session_state["user"] = restored_user
-            st.session_state["session_token"] = token
+            st.session_state["session_token"] = restore_token
+        del st.query_params["t"]
+    else:
+        try_restore_session_from_cookie()
 
 if not st.session_state["user"]:
     render_top_banner()
-    st.caption("Log in or create a free account to save your work and track your score history over time.")
-    tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
+    st.caption("New here? Create a free account to save your work and track your score history over time.")
+    tab_signup, tab_login = st.tabs(["Sign up", "Log in"])
 
     with tab_login:
         lu = st.text_input("Username", key="login_user")
         lp = st.text_input("Password", type="password", key="login_pass")
         if st.button("Log in"):
-            db_error = None
-            try:
-                ok = verify_user(conn, lu.strip(), lp)
-            except Exception as e:
-                ok = False
-                db_error = str(e)
-            if ok:
+            status, err = verify_user(conn, lu.strip(), lp)
+            if status == "ok":
                 token = create_session(conn, lu.strip())
                 st.session_state["user"] = lu.strip()
                 st.session_state["session_token"] = token
-                st.query_params["t"] = token
+                set_session_cookie(token)
                 st.rerun()
-            elif db_error:
+            elif status == "unverified":
+                st.session_state["pending_verify_user"] = lu.strip()
+                st.warning("This account's email hasn't been verified yet. Enter the code sent to your email in the Sign up tab.")
+                st.rerun()
+            elif status == "error":
                 st.error("Could not reach the database.")
                 with st.expander("Technical details"):
-                    st.code(db_error)
+                    st.code(err)
             else:
                 st.error("Incorrect username or password.")
 
     with tab_signup:
-        su = st.text_input("Choose a username", key="signup_user")
-        sp = st.text_input("Choose a password", type="password", key="signup_pass")
-        if st.button("Create account"):
-            if not su.strip() or not sp:
-                st.error("Enter a username and password.")
-            else:
-                ok, err = create_user(conn, su.strip(), sp)
-                if ok:
-                    token = create_session(conn, su.strip())
-                    st.session_state["user"] = su.strip()
-                    st.session_state["session_token"] = token
-                    st.query_params["t"] = token
+        pending_user = st.session_state.get("pending_verify_user")
+
+        if pending_user:
+            st.markdown(f"**Verify your email for `{esc(pending_user)}`**")
+            st.caption("Enter the 6-digit code we emailed you. It expires in 10 minutes.")
+            code_input = st.text_input("Verification code", key="verify_code_input", max_chars=6)
+            col_verify, col_resend, col_cancel = st.columns(3)
+            with col_verify:
+                if st.button("Verify & Continue", type="primary", use_container_width=True):
+                    if not code_input.strip():
+                        st.error("Enter the code from your email.")
+                    else:
+                        ok, err = verify_signup_code(conn, pending_user, code_input.strip())
+                        if ok:
+                            token = create_session(conn, pending_user)
+                            st.session_state["user"] = pending_user
+                            st.session_state["session_token"] = token
+                            st.session_state.pop("pending_verify_user", None)
+                            set_session_cookie(token)
+                            st.rerun()
+                        elif err == "expired":
+                            st.error("That code expired. Click Resend for a new one.")
+                        elif err == "mismatch":
+                            st.error("That code doesn't match. Check your email and try again.")
+                        elif err == "not_found":
+                            st.error("Something went wrong — please sign up again.")
+                            st.session_state.pop("pending_verify_user", None)
+                        else:
+                            st.error("Could not verify — a database error occurred.")
+                            with st.expander("Technical details"):
+                                st.code(err)
+            with col_resend:
+                if st.button("Resend code", use_container_width=True):
+                    ok, err, email = resend_verification_code(conn, pending_user)
+                    if ok:
+                        st.success(f"New code sent to {email}.")
+                    else:
+                        st.error("Could not send the email.")
+                        with st.expander("Technical details"):
+                            st.code(err)
+            with col_cancel:
+                if st.button("Use different details", use_container_width=True):
+                    st.session_state.pop("pending_verify_user", None)
                     st.rerun()
-                elif err == "duplicate":
-                    st.error("That username is already taken.")
+        else:
+            su = st.text_input("Choose a username", key="signup_user")
+            se = st.text_input("Email address", key="signup_email")
+            sp = st.text_input("Choose a password", type="password", key="signup_pass")
+            if st.button("Create account"):
+                if not su.strip() or not sp:
+                    st.error("Enter a username and password.")
+                elif not is_valid_email(se.strip()):
+                    st.error("Enter a valid email address.")
                 else:
-                    st.error("Could not create the account — a database error occurred.")
-                    with st.expander("Technical details"):
-                        st.code(err)
+                    ok, err, code = upsert_pending_signup(conn, su.strip(), se.strip(), sp)
+                    if ok:
+                        sent_ok, sent_err = send_verification_email(se.strip(), code)
+                        if sent_ok:
+                            st.session_state["pending_verify_user"] = su.strip()
+                            st.rerun()
+                        else:
+                            st.error("Account created, but the verification email couldn't be sent.")
+                            with st.expander("Technical details"):
+                                st.code(sent_err)
+                    elif err == "username_taken":
+                        st.error("That username is already taken.")
+                    elif err == "email_taken":
+                        st.error("That email is already registered to another account.")
+                    else:
+                        st.error("Could not create the account — a database error occurred.")
+                        with st.expander("Technical details"):
+                            st.code(err)
 
     st.stop()
 
@@ -1024,6 +1812,7 @@ with st.sidebar:
             delete_session(conn, token)
         st.session_state["user"] = None
         st.session_state.pop("session_token", None)
+        clear_session_cookie()
         if "t" in st.query_params:
             del st.query_params["t"]
         st.rerun()
@@ -1046,8 +1835,12 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("NAVIGATE")
-    nav_options = list(TASK_CONFIGS.keys()) + ["progress"]
-    nav_labels = {**{k: v["label"] for k, v in TASK_CONFIGS.items()}, "progress": "My Progress"}
+    nav_options = list(TASK_CONFIGS.keys()) + ["study_tips", "progress"]
+    nav_labels = {
+        **{k: v["label"] for k, v in TASK_CONFIGS.items()},
+        "study_tips": "Study Tips",
+        "progress": "My Progress",
+    }
     if "current_section" not in st.session_state:
         st.session_state["current_section"] = "essay"
     for opt in nav_options:
@@ -1068,7 +1861,11 @@ render_top_banner()
 
 current_section = st.session_state["current_section"]
 
-if current_section in TASK_CONFIGS:
+if current_section == "dictation":
+    cfg = TASK_CONFIGS["dictation"]
+    render_dictation_section(cfg, conn)
+
+elif current_section in TASK_CONFIGS:
     task_key = current_section
     cfg = TASK_CONFIGS[task_key]
 
@@ -1088,7 +1885,7 @@ if current_section in TASK_CONFIGS:
     sub_new, sub_history = st.tabs(["New attempt", "History"])
 
     with sub_new:
-        left, right = st.columns([1.3, 1])
+        left, right = st.columns([2.3, 1])
 
         with left:
             # Timer key includes the question index so it resets fresh for
@@ -1109,26 +1906,38 @@ if current_section in TASK_CONFIGS:
             with nav_col3:
                 st.caption(f"Question {current_idx + 1} of {len(bank)}")
 
-            st.markdown(f'**{cfg["context_label"]}**')
-            st.markdown(
-                f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;'
-                f'padding:14px 16px;font-size:14px;color:#0F172A;margin-bottom:10px;'
-                f'max-height:{cfg["context_height"]}px;overflow-y:auto;">{esc(context_text)}</div>',
-                unsafe_allow_html=True,
-            )
-            if task_key == "sst":
-                tts_button(context_text, key=f"{task_key}_{current_idx}")
+            if task_key == "essay":
+                if st.button("✏️ Write Your Own Essay", key="open_custom_essay", use_container_width=True):
+                    custom_essay_dialog()
 
-            response_text = st.text_area(cfg["response_label"], height=220,
+            if task_key == "sst":
+                # Real PTE exam behavior: you LISTEN to the lecture, you never
+                # see it written out. Show only the audio control, not the
+                # transcript — the text is still used behind the scenes for
+                # grading (context_text), just never rendered on screen.
+                st.markdown(f'**{cfg["context_label"]}**')
+                st.caption("Listen carefully — the transcript is not shown, just like the real exam.")
+                tts_button(context_text, key=f"{task_key}_{current_idx}")
+            else:
+                st.markdown(f'**{cfg["context_label"]}**')
+                st.markdown(
+                    f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;'
+                    f'padding:14px 16px;font-size:14px;color:#0F172A;margin-bottom:10px;'
+                    f'max-height:{cfg["context_height"]}px;overflow-y:auto;">{esc(context_text)}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            response_text = st.text_area(cfg["response_label"], height=420,
                                           placeholder=cfg["response_placeholder"],
                                           key=f"resp_{task_key}_{current_idx}")
             wc = word_count(response_text)
             char_count = len(response_text)
             lo, hi = cfg["word_range"]
-            wc_color = "green" if lo <= wc <= hi else ("orange" if wc else "gray")
-            st.markdown(
-                f'<div class="w90-metric-stack">METRIC STACK: {wc} WORDS | CHARACTER BLOCKS: {char_count}</div>',
-                unsafe_allow_html=True,
+            render_live_word_counter(
+                counter_key=f"{task_key}_{current_idx}",
+                textarea_label=cfg["response_label"],
+                lo=lo, hi=hi,
+                initial_text=response_text,
             )
             st.caption(cfg["word_hint"])
             submit = st.button("Mark My Response Against Rubric", type="primary", key=f"submit_{task_key}_{current_idx}",
@@ -1188,6 +1997,24 @@ if current_section in TASK_CONFIGS:
                         render_result(json.loads(hresult_json), task_key)
                     except Exception:
                         st.write("(Could not load detailed breakdown for this entry.)")
+
+elif current_section == "study_tips":
+    st.subheader("Study Tips — how to reach 90")
+    st.caption("Curated, rubric-specific advice for each task type. Not personalized — your recurring weaknesses are on the My Progress page.")
+
+    st.markdown("---")
+    st.markdown("**Across every task**")
+    for tip in STUDY_TIPS_GENERAL:
+        st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
+
+    for task_key, cfg in TASK_CONFIGS.items():
+        tips = STUDY_TIPS.get(task_key, [])
+        if not tips:
+            continue
+        st.markdown("---")
+        st.subheader(cfg["label"])
+        for tip in tips:
+            st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
 
 elif current_section == "progress":
     all_hist = get_all_history(conn, st.session_state["user"])
