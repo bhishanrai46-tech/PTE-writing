@@ -88,6 +88,7 @@ st.markdown(
 
     /* Sidebar — light theme, matching the rest of the app */
     [data-testid="stSidebar"] { background-color: var(--sidebar-bg) !important; border-right: 1px solid var(--border); }
+    [data-testid="stSidebar"] > div:first-child { padding-top: 8px; }
     [data-testid="stSidebar"] * { color: var(--text) !important; }
     [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * { color: var(--text-secondary) !important; }
     [data-testid="stSidebar"] .stButton > button { background-color: #FFFFFF !important; border: 1.5px solid #CBD5E1 !important; color: var(--text) !important; }
@@ -228,7 +229,8 @@ st.markdown(
     .pte-summary { font-size: 14.5px; color: var(--text-secondary) !important; text-align: center; max-width: 560px; margin: 8px auto 0; }
 
     .w90-pro-banner {
-        background-color: var(--text);
+        background-color: #FFF7ED;
+        border: 1px solid #FDBA74;
         border-radius: 12px;
         padding: 18px 24px;
         margin-top: 32px;
@@ -238,16 +240,30 @@ st.markdown(
         flex-wrap: wrap;
         gap: 12px;
     }
-    .w90-pro-banner .w90-pro-title { color: #FFFFFF !important; font-weight: 700; font-size: 16px; margin: 0; }
-    .w90-pro-banner .w90-pro-sub { color: #CBD5E1 !important; font-size: 13px; margin-top: 2px; }
+    .w90-pro-banner .w90-pro-title { color: #9A3412 !important; font-weight: 700; font-size: 16px; margin: 0; }
+    .w90-pro-banner .w90-pro-sub { color: #C2410C !important; font-size: 13px; margin-top: 2px; }
 
     .w90-pro-card {
-        background: var(--guide-bg); border: 1px solid #BFDBFE; border-radius: 12px;
+        background: #FFF7ED; border: 1px solid #FDBA74; border-radius: 12px;
         padding: 28px 32px; text-align: center; max-width: 420px; margin: 12px auto;
     }
-    .w90-pro-price { font-size: 40px; font-weight: 700; color: var(--text) !important; }
-    .w90-pro-price span { font-size: 15px; font-weight: 500; color: var(--text-secondary) !important; }
-    .w90-pro-feature { font-size: 14px; color: var(--text) !important; text-align: left; padding: 4px 0; }
+    .w90-pro-price { font-size: 40px; font-weight: 700; color: #9A3412 !important; }
+    .w90-pro-price span { font-size: 15px; font-weight: 500; color: #C2410C !important; }
+    .w90-pro-feature { font-size: 14px; color: #7C2D12 !important; text-align: left; padding: 4px 0; }
+
+    /* Mobile responsiveness */
+    @media (max-width: 640px) {
+        .w90-banner { padding: 14px 18px; }
+        .w90-banner .w90-title { font-size: 20px; }
+        .w90-banner .w90-tag { font-size: 12px; }
+        .w90-banner .w90-badge { font-size: 11px; padding: 6px 12px; }
+        .pte-score-box .num { font-size: 36px; }
+        .w90-pro-card { padding: 20px 18px; max-width: 100%; }
+        .w90-pro-price { font-size: 32px; }
+        .w90-pro-banner { padding: 14px 16px; flex-direction: column; align-items: flex-start; }
+        .stButton > button { font-size: 13.5px; padding: 8px 10px !important; }
+        .stTextArea textarea { font-size: 16px; } /* prevents iOS auto-zoom on focus */
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -277,10 +293,10 @@ def inject_sidebar_toggle():
                 btn.innerHTML = '&#9776;';
                 btn.title = 'Show/hide menu';
                 btn.style.cssText = [
-                    'position:fixed', 'top:12px', 'left:12px', 'z-index:2147483647',
+                    'position:fixed', 'top:78px', 'left:12px', 'z-index:2147483647',
                     'background:#2563EB', 'color:#FFFFFF', 'border:none',
-                    'border-radius:8px', 'width:38px', 'height:38px',
-                    'font-size:18px', 'line-height:1', 'cursor:pointer',
+                    'border-radius:8px', 'width:34px', 'height:34px',
+                    'font-size:16px', 'line-height:1', 'cursor:pointer',
                     'box-shadow:0 2px 8px rgba(0,0,0,0.3)', 'display:flex',
                     'align-items:center', 'justify-content:center'
                 ].join(';');
@@ -1242,6 +1258,27 @@ def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
     )
 
 
+def render_word_level_diff(original: str, corrected: str) -> str:
+    """Builds one flowing sentence with only the differing words marked —
+    wrong/removed words struck through in red, replacement/added words in
+    green — instead of showing the whole original sentence and the whole
+    corrected sentence as two separate blocks. Whitespace is preserved as
+    its own tokens so spacing reads naturally."""
+    orig_tokens = re.findall(r"\s+|\S+", original)
+    corr_tokens = re.findall(r"\s+|\S+", corrected)
+    matcher = difflib.SequenceMatcher(None, orig_tokens, corr_tokens, autojunk=False)
+    parts = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            parts.append(esc("".join(orig_tokens[i1:i2])))
+        else:
+            if i1 != i2:
+                parts.append(f'<span class="orig-bad">{esc("".join(orig_tokens[i1:i2]))}</span>')
+            if j1 != j2:
+                parts.append(f'<span class="fixed">{esc("".join(corr_tokens[j1:j2]))}</span>')
+    return "".join(parts)
+
+
 def render_result(result: dict, task_key: str):
     cfg = TASK_CONFIGS[task_key]
     overall = max(10, min(90, round(result.get("overall", 0))))
@@ -1275,9 +1312,9 @@ def render_result(result: dict, task_key: str):
         has_error = item.get("has_error", False)
         css_class = "err" if has_error else "ok"
         if has_error:
+            diff_html = render_word_level_diff(item.get("original", ""), item.get("corrected", ""))
             body = (
-                f'<span class="orig-bad">{esc(item.get("original",""))}</span><br>'
-                f'→ <span class="fixed">{esc(item.get("corrected",""))}</span>'
+                f'{diff_html}'
                 f'<span class="why">{esc(item.get("explanation",""))}</span>'
             )
         else:
@@ -1647,7 +1684,7 @@ with st.sidebar:
     nav_labels = {
         **{k: v["label"] for k, v in TASK_CONFIGS.items()},
         "study_tips": "Study Tips",
-        "progress": "My Progress",
+        "progress": "My Progress (Free)",
         "get_pro": "Get Pro",
     }
     if "current_section" not in st.session_state:
@@ -1716,7 +1753,7 @@ elif current_section in TASK_CONFIGS:
                 st.caption(f"Question {current_idx + 1} of {len(bank)}")
 
             if task_key == "essay":
-                if st.button("✏️ Write Your Own Essay", key="open_custom_essay", use_container_width=True):
+                if st.button("Write Your Own Essay", key="open_custom_essay", use_container_width=True):
                     custom_essay_dialog()
 
             if task_key == "sst":
