@@ -773,6 +773,116 @@ def verify_user(conn, username: str, password: str):
     return "ok", None
 
 
+def send_login_code(conn, username: str):
+    """Sends a fresh 6-digit code for the login step, reusing the same
+    verification_code/verification_expires_at columns as sign-up. Returns
+    (ok, error, email)."""
+    try:
+        res = conn.table("users").select("email").eq("username", username).execute()
+        rows = res.data or []
+        if not rows:
+            return False, "not_found", None
+        email = rows[0]["email"]
+        code = generate_verification_code()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        conn.table("users").update({
+            "verification_code": code,
+            "verification_expires_at": expires_at,
+        }).eq("username", username).execute()
+        sent_ok, sent_err = send_verification_email(email, code)
+        if not sent_ok:
+            return False, sent_err, email
+        return True, None, email
+    except Exception as e:
+        return False, str(e), None
+
+
+def verify_login_code(conn, username: str, code: str):
+    """Checks the code sent by send_login_code and clears it once used.
+    Returns (ok, error). error in {'not_found','expired','mismatch'} or a
+    raw string for other database errors."""
+    try:
+        res = conn.table("users").select(
+            "verification_code,verification_expires_at"
+        ).eq("username", username).execute()
+        rows = res.data or []
+        if not rows:
+            return False, "not_found"
+        row = rows[0]
+        expires_at = row.get("verification_expires_at")
+        if expires_at:
+            try:
+                if datetime.now(timezone.utc) > datetime.fromisoformat(expires_at.replace("Z", "+00:00")):
+                    return False, "expired"
+            except ValueError:
+                pass
+        if not row.get("verification_code") or row.get("verification_code") != code.strip():
+            return False, "mismatch"
+        conn.table("users").update({
+            "verification_code": None,
+            "verification_expires_at": None,
+        }).eq("username", username).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def request_password_reset(conn, username: str):
+    """Sends a 6-digit reset code to the account's email, reusing the same
+    verification_code/verification_expires_at columns. Returns (ok, error,
+    email). error is 'not_found' if the username doesn't exist, or a raw
+    string for other failures (including the email failing to send)."""
+    try:
+        res = conn.table("users").select("email").eq("username", username).execute()
+        rows = res.data or []
+        if not rows:
+            return False, "not_found", None
+        email = rows[0]["email"]
+        code = generate_verification_code()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        conn.table("users").update({
+            "verification_code": code,
+            "verification_expires_at": expires_at,
+        }).eq("username", username).execute()
+        sent_ok, sent_err = send_verification_email(email, code)
+        if not sent_ok:
+            return False, sent_err, email
+        return True, None, email
+    except Exception as e:
+        return False, str(e), None
+
+
+def reset_password_with_code(conn, username: str, code: str, new_password: str):
+    """Verifies the reset code and, if valid, sets a new password. Returns
+    (ok, error). error in {'not_found','expired','mismatch'} or a raw
+    string for other database errors."""
+    try:
+        res = conn.table("users").select(
+            "verification_code,verification_expires_at"
+        ).eq("username", username).execute()
+        rows = res.data or []
+        if not rows:
+            return False, "not_found"
+        row = rows[0]
+        expires_at = row.get("verification_expires_at")
+        if expires_at:
+            try:
+                if datetime.now(timezone.utc) > datetime.fromisoformat(expires_at.replace("Z", "+00:00")):
+                    return False, "expired"
+            except ValueError:
+                pass
+        if not row.get("verification_code") or row.get("verification_code") != code.strip():
+            return False, "mismatch"
+        conn.table("users").update({
+            "password_hash": hash_pw(new_password),
+            "verification_code": None,
+            "verification_expires_at": None,
+        }).eq("username", username).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
 def create_session(conn, username: str) -> str:
     token = secrets.token_urlsafe(32)
     conn.table("sessions").insert({"token": token, "username": username}).execute()
@@ -1693,26 +1803,139 @@ if not st.session_state["user"]:
     tab_signup, tab_login = st.tabs(["Sign up", "Log in"])
 
     with tab_login:
-        lu = st.text_input("Username", key="login_user")
-        lp = st.text_input("Password", type="password", key="login_pass")
-        if st.button("Log in"):
-            status, err = verify_user(conn, lu.strip(), lp)
-            if status == "ok":
-                token = create_session(conn, lu.strip())
-                st.session_state["user"] = lu.strip()
-                st.session_state["session_token"] = token
-                set_session_cookie(token)
-                st.rerun()
-            elif status == "unverified":
-                st.session_state["pending_verify_user"] = lu.strip()
-                st.warning("This account's email hasn't been verified yet. Enter the code sent to your email in the Sign up tab.")
-                st.rerun()
-            elif status == "error":
-                st.error("Could not reach the database.")
-                with st.expander("Technical details"):
-                    st.code(err)
-            else:
-                st.error("Incorrect username or password.")
+        pending_login_user = st.session_state.get("pending_login_2fa_user")
+        pending_reset_user = st.session_state.get("pending_reset_user")
+
+        if pending_login_user:
+            st.markdown(f"**Enter the code sent to your email**")
+            st.caption(f"We emailed a 6-digit code to finish logging in as `{esc(pending_login_user)}`. It expires in 10 minutes.")
+            login_code_input = st.text_input("Verification code", key="login_code_input", max_chars=6)
+            col_verify, col_resend, col_cancel = st.columns(3)
+            with col_verify:
+                if st.button("Verify & Log in", type="primary", use_container_width=True, key="login_verify_btn"):
+                    if not login_code_input.strip():
+                        st.error("Enter the code from your email.")
+                    else:
+                        ok, err = verify_login_code(conn, pending_login_user, login_code_input.strip())
+                        if ok:
+                            token = create_session(conn, pending_login_user)
+                            st.session_state["user"] = pending_login_user
+                            st.session_state["session_token"] = token
+                            st.session_state.pop("pending_login_2fa_user", None)
+                            set_session_cookie(token)
+                            st.rerun()
+                        elif err == "expired":
+                            st.error("That code expired. Click Resend for a new one.")
+                        elif err == "mismatch":
+                            st.error("That code doesn't match. Check your email and try again.")
+                        elif err == "not_found":
+                            st.error("Something went wrong — please log in again.")
+                            st.session_state.pop("pending_login_2fa_user", None)
+                        else:
+                            st.error("Could not verify — a database error occurred.")
+                            with st.expander("Technical details"):
+                                st.code(err)
+            with col_resend:
+                if st.button("Resend code", use_container_width=True, key="login_resend_btn"):
+                    ok, err, email = send_login_code(conn, pending_login_user)
+                    if ok:
+                        st.success(f"New code sent to {email}.")
+                    else:
+                        st.error("Could not send the email.")
+                        with st.expander("Technical details"):
+                            st.code(err)
+            with col_cancel:
+                if st.button("Cancel", use_container_width=True, key="login_cancel_btn"):
+                    st.session_state.pop("pending_login_2fa_user", None)
+                    st.rerun()
+        elif pending_reset_user:
+            st.markdown(f"**Reset password for `{esc(pending_reset_user)}`**")
+            st.caption("Enter the 6-digit code we emailed you, and choose a new password. The code expires in 10 minutes.")
+            reset_code_input = st.text_input("Verification code", key="reset_code_input", max_chars=6)
+            new_pw_input = st.text_input("New password", type="password", key="reset_new_pw")
+            col_reset, col_resend_reset, col_cancel_reset = st.columns(3)
+            with col_reset:
+                if st.button("Reset & Log in", type="primary", use_container_width=True, key="reset_submit_btn"):
+                    if not reset_code_input.strip() or not new_pw_input:
+                        st.error("Enter the code and a new password.")
+                    else:
+                        ok, err = reset_password_with_code(conn, pending_reset_user, reset_code_input.strip(), new_pw_input)
+                        if ok:
+                            token = create_session(conn, pending_reset_user)
+                            st.session_state["user"] = pending_reset_user
+                            st.session_state["session_token"] = token
+                            st.session_state.pop("pending_reset_user", None)
+                            set_session_cookie(token)
+                            st.rerun()
+                        elif err == "expired":
+                            st.error("That code expired. Click Resend for a new one.")
+                        elif err == "mismatch":
+                            st.error("That code doesn't match. Check your email and try again.")
+                        elif err == "not_found":
+                            st.error("Something went wrong — please try again.")
+                            st.session_state.pop("pending_reset_user", None)
+                        else:
+                            st.error("Could not reset the password — a database error occurred.")
+                            with st.expander("Technical details"):
+                                st.code(err)
+            with col_resend_reset:
+                if st.button("Resend code", use_container_width=True, key="reset_resend_btn"):
+                    ok, err, email = request_password_reset(conn, pending_reset_user)
+                    if ok:
+                        st.success(f"New code sent to {email}.")
+                    else:
+                        st.error("Could not send the email.")
+                        with st.expander("Technical details"):
+                            st.code(err)
+            with col_cancel_reset:
+                if st.button("Cancel", use_container_width=True, key="reset_cancel_btn"):
+                    st.session_state.pop("pending_reset_user", None)
+                    st.rerun()
+        else:
+            lu = st.text_input("Username", key="login_user")
+            lp = st.text_input("Password", type="password", key="login_pass")
+            col_login, col_forgot = st.columns([1, 1])
+            with col_login:
+                login_clicked = st.button("Log in", use_container_width=True)
+            with col_forgot:
+                forgot_clicked = st.button("Forgot password?", use_container_width=True)
+
+            if login_clicked:
+                status, err = verify_user(conn, lu.strip(), lp)
+                if status == "ok":
+                    sent_ok, sent_err, email = send_login_code(conn, lu.strip())
+                    if sent_ok:
+                        st.session_state["pending_login_2fa_user"] = lu.strip()
+                        st.rerun()
+                    else:
+                        st.error("Password correct, but the verification email couldn't be sent.")
+                        with st.expander("Technical details"):
+                            st.code(sent_err)
+                elif status == "unverified":
+                    st.session_state["pending_verify_user"] = lu.strip()
+                    st.warning("This account's email hasn't been verified yet. Enter the code sent to your email in the Sign up tab.")
+                    st.rerun()
+                elif status == "error":
+                    st.error("Could not reach the database.")
+                    with st.expander("Technical details"):
+                        st.code(err)
+                else:
+                    st.error("Incorrect username or password.")
+
+            if forgot_clicked:
+                if not lu.strip():
+                    st.error("Enter your username above first, then click Forgot password.")
+                else:
+                    ok, err, email = request_password_reset(conn, lu.strip())
+                    if ok:
+                        st.session_state["pending_reset_user"] = lu.strip()
+                        st.rerun()
+                    elif err == "not_found":
+                        st.error("No account found with that username.")
+                    else:
+                        st.error("Could not send the reset email.")
+                        with st.expander("Technical details"):
+                            st.code(err)
 
     with tab_signup:
         pending_user = st.session_state.get("pending_verify_user")
