@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import streamlit as st
 import streamlit.components.v1 as components
+import extra_streamlit_components as stx
 import anthropic
 import altair as alt
 import pandas as pd
@@ -225,6 +226,28 @@ st.markdown(
     .pte-score-box .num { font-size: 48px; font-weight: 700; color: var(--text) !important; line-height: 1; }
     .pte-score-box .of90 { font-size: 12px; color: var(--text-secondary) !important; letter-spacing: 0.06em; text-transform: uppercase; margin-top: 2px; }
     .pte-summary { font-size: 14.5px; color: var(--text-secondary) !important; text-align: center; max-width: 560px; margin: 8px auto 0; }
+
+    .w90-pro-banner {
+        background-color: var(--text);
+        border-radius: 12px;
+        padding: 18px 24px;
+        margin-top: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+    .w90-pro-banner .w90-pro-title { color: #FFFFFF !important; font-weight: 700; font-size: 16px; margin: 0; }
+    .w90-pro-banner .w90-pro-sub { color: #CBD5E1 !important; font-size: 13px; margin-top: 2px; }
+
+    .w90-pro-card {
+        background: var(--guide-bg); border: 1px solid #BFDBFE; border-radius: 12px;
+        padding: 28px 32px; text-align: center; max-width: 420px; margin: 12px auto;
+    }
+    .w90-pro-price { font-size: 40px; font-weight: 700; color: var(--text) !important; }
+    .w90-pro-price span { font-size: 15px; font-weight: 500; color: var(--text-secondary) !important; }
+    .w90-pro-feature { font-size: 14px; color: var(--text) !important; text-align: left; padding: 4px 0; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -658,66 +681,60 @@ def delete_session(conn, token: str):
         pass
 
 
+SESSION_COOKIE_NAME = "write90_session"
+
+
+@st.cache_resource(show_spinner=False)
+def get_cookie_manager():
+    """A single shared cookie-manager component per server process. Cached
+    (rather than re-instantiated every script run) so its underlying
+    frontend component keeps a stable identity across reruns — recreating
+    it each run is what caused the old custom approach to race against
+    st.rerun() and silently lose the cookie write on refresh."""
+    return stx.CookieManager(key="write90_cookie_manager")
+
+
 def set_session_cookie(token: str):
     """Persists login across a page refresh using a browser cookie scoped to
-    this device only — never the URL. A cookie isn't part of a link you'd
-    copy and share, so this restores login on refresh without the leak the
-    old URL-token approach had."""
-    max_age = 60 * 60 * 24 * 30  # 30 days
-    components.html(
-        f"""
-        <script>
-        try {{
-            window.parent.document.cookie =
-                "write90_session={token}; path=/; max-age={max_age}; samesite=Lax";
-        }} catch (e) {{}}
-        </script>
-        """,
-        height=0,
+    this device only — never the URL. Uses a real Streamlit cookie
+    component instead of injecting a <script> via components.html, which
+    was prone to a timing race against the immediately-following
+    st.rerun() (the script could be torn down before it finished writing
+    the cookie)."""
+    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+    get_cookie_manager().set(
+        SESSION_COOKIE_NAME, token, expires_at=expires_at, key=f"set_{token[:8]}"
     )
 
 
 def clear_session_cookie():
-    components.html(
-        """
-        <script>
-        try {
-            window.parent.document.cookie = "write90_session=; path=/; max-age=0";
-        } catch (e) {}
-        </script>
-        """,
-        height=0,
-    )
+    try:
+        get_cookie_manager().delete(SESSION_COOKIE_NAME, key="delete_session_cookie")
+    except KeyError:
+        pass  # cookie was already absent — nothing to clear
 
 
-def try_restore_session_from_cookie():
-    """If no one is logged in and the URL doesn't already carry a restore
-    token, ask the browser for the write90_session cookie. If found, it
-    briefly appends the token to the URL (replacing the current history
-    entry, not adding a new one) so this Python script can read it via
-    st.query_params on the next run — then the token is stripped from the
-    URL again immediately after restoring, so it never sits there to be
-    copied and shared."""
-    components.html(
-        """
-        <script>
-        (function() {
-            try {
-                var doc = window.parent.document;
-                var params = new URLSearchParams(window.parent.location.search);
-                if (params.has('t')) return;
-                var match = doc.cookie.match(/(?:^|; )write90_session=([^;]*)/);
-                if (!match) return;
-                var token = decodeURIComponent(match[1]);
-                var url = new URL(window.parent.location.href);
-                url.searchParams.set('t', token);
-                window.parent.location.replace(url.toString());
-            } catch (e) {}
-        })();
-        </script>
-        """,
-        height=0,
-    )
+def get_session_cookie():
+    """Reads the saved session token from the browser, or None if absent.
+    May return None on the very first script run before the cookie
+    component has finished mounting — the app treats that the same as
+    'not logged in yet', and a normal Streamlit rerun (e.g. any widget
+    interaction) picks it up moments later."""
+    return get_cookie_manager().get(SESSION_COOKIE_NAME)
+
+
+def save_pro_lead(conn, username: str, email: str, phone: str):
+    """Records interest in Pro so it can be followed up on manually. Returns
+    (ok, error)."""
+    try:
+        conn.table("pro_leads").insert({
+            "username": username,
+            "email": email,
+            "phone": phone,
+        }).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
 
 def save_submission(conn, username: str, task_key: str, context_text: str, response_text: str, result: dict):
@@ -1534,21 +1551,16 @@ if "user" not in st.session_state:
     st.session_state["user"] = None
 
 # Restore login on refresh from a browser cookie (device-local, never part
-# of a shareable URL) rather than the old URL-token approach. The cookie
-# read happens client-side; if found, the token briefly lands in the URL
-# (replacing, not adding, the current history entry) purely so this script
-# can read it once via st.query_params — then it's stripped again below so
-# it never sits in the address bar to be copied and shared.
+# of a shareable URL). get_session_cookie() may briefly return None on the
+# very first run before the cookie component finishes mounting — that's
+# fine, since the component's own internal rerun re-checks moments later.
 if not st.session_state["user"]:
-    restore_token = st.query_params.get("t")
-    if restore_token:
-        restored_user = get_session_user(conn, restore_token)
+    saved_token = get_session_cookie()
+    if saved_token:
+        restored_user = get_session_user(conn, saved_token)
         if restored_user:
             st.session_state["user"] = restored_user
-            st.session_state["session_token"] = restore_token
-        del st.query_params["t"]
-    else:
-        try_restore_session_from_cookie()
+            st.session_state["session_token"] = saved_token
 
 if not st.session_state["user"]:
     render_top_banner()
@@ -1615,15 +1627,13 @@ with st.sidebar:
         st.session_state["user"] = None
         st.session_state.pop("session_token", None)
         clear_session_cookie()
-        if "t" in st.query_params:
-            del st.query_params["t"]
         st.rerun()
 
     api_key = secret_key if secret_key else st.text_input("Anthropic API key", type="password")
 
     usage_today = get_usage_count(conn, st.session_state["user"])
     st.markdown("---")
-    st.caption(f"DAILY DIAGNOSTIC EVALUATIONS: {usage_today} / {DAILY_LIMIT}")
+    st.caption(f"DAILY LIMIT: {usage_today} / {DAILY_LIMIT}")
     st.progress(min(1.0, usage_today / DAILY_LIMIT if DAILY_LIMIT else 0))
 
     all_hist = get_all_history(conn, st.session_state["user"])
@@ -1637,11 +1647,12 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("NAVIGATE")
-    nav_options = list(TASK_CONFIGS.keys()) + ["study_tips", "progress"]
+    nav_options = list(TASK_CONFIGS.keys()) + ["study_tips", "progress", "get_pro"]
     nav_labels = {
         **{k: v["label"] for k, v in TASK_CONFIGS.items()},
         "study_tips": "Study Tips",
         "progress": "My Progress",
+        "get_pro": "Get Pro",
     }
     if "current_section" not in st.session_state:
         st.session_state["current_section"] = "essay"
@@ -1818,57 +1829,73 @@ elif current_section == "study_tips":
         for tip in tips:
             st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
 
-elif current_section == "progress":
-    all_hist = get_all_history(conn, st.session_state["user"])
-    if not all_hist:
-        st.info("Grade a few responses across the sections in the sidebar and your overall progress will show up here.")
-    else:
-        total = len(all_hist)
-        avg = round(sum(r[2] for r in all_hist) / total)
-        best = max(r[2] for r in all_hist)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total attempts", total)
-        c2.metric("Average score", f"{avg}/90")
-        c3.metric("Best score", f"{best}/90")
-        c4.metric("Day streak", streak)
+elif current_section == "get_pro":
+    st.subheader("Write90 Pro")
+    st.markdown(
+        """
+        <div class="w90-pro-card">
+            <div class="w90-pro-price">$12<span>/month</span></div>
+            <div style="margin-top:18px;">
+                <div class="w90-pro-feature">✓ Unlimited daily AI-graded evaluations</div>
+                <div class="w90-pro-feature">✓ Full access to Essay, SWT, SST & Dictation banks</div>
+                <div class="w90-pro-feature">✓ Detailed score history & progress tracking</div>
+                <div class="w90-pro-feature">✓ Priority support</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        for task_key, cfg in TASK_CONFIGS.items():
-            task_scores = [r[2] for r in all_hist if r[0] == task_key]
-            if not task_scores:
-                continue
+    if "show_pro_form" not in st.session_state:
+        st.session_state["show_pro_form"] = False
 
-            st.markdown("---")
-            st.subheader(cfg["label"])
-            st.caption(f"{len(task_scores)} attempts · average {round(sum(task_scores)/len(task_scores))}/90 · latest {task_scores[-1]}/90")
-            if len(task_scores) > 1:
-                fixed_score_chart(task_scores)
+    col_center = st.columns([1, 1, 1])[1]
+    with col_center:
+        if not st.session_state["show_pro_form"]:
+            if st.button("Get Pro", type="primary", use_container_width=True, key="get_pro_open_btn"):
+                st.session_state["show_pro_form"] = True
+                st.rerun()
 
-            col_weak, col_tips = st.columns(2)
-
-            with col_weak:
-                st.markdown("**What to improve**")
-                averages = get_criteria_averages(conn, st.session_state["user"], task_key)
-                if not averages:
-                    st.caption("Not enough data yet.")
+    if st.session_state["show_pro_form"]:
+        st.markdown("---")
+        st.markdown("**Leave your contact details and we'll reach out to get you set up.**")
+        pro_email = st.text_input("Email address", key="pro_lead_email")
+        pro_phone = st.text_input("Phone number", key="pro_lead_phone")
+        col_submit, col_cancel = st.columns(2)
+        with col_submit:
+            if st.button("Submit", type="primary", use_container_width=True, key="pro_lead_submit"):
+                if not pro_email.strip() or not pro_phone.strip():
+                    st.error("Enter both your email and phone number.")
                 else:
-                    crit_lookup = {key: (name, max_score) for key, name, max_score in cfg["criteria"]}
-                    ranked = sorted(
-                        averages.items(),
-                        key=lambda kv: kv[1] / crit_lookup[kv[0]][1] if kv[0] in crit_lookup else 1,
-                    )
-                    for key, avg_score in ranked[:2]:
-                        if key not in crit_lookup:
-                            continue
-                        name, max_score = crit_lookup[key]
-                        st.write(f"{name} — averaging {avg_score:.1f} / {max_score}")
-                        st.progress(min(1.0, avg_score / max_score if max_score else 0))
-                        st.caption(TIP_LIBRARY.get(key, "Focus extra practice on this area."))
+                    ok, err = save_pro_lead(conn, st.session_state["user"], pro_email.strip(), pro_phone.strip())
+                    if ok:
+                        st.session_state["show_pro_form"] = False
+                        st.success("Thanks! We'll be in touch shortly to get you set up with Pro.")
+                    else:
+                        st.error("Could not save your details — a database error occurred.")
+                        with st.expander("Technical details"):
+                            st.code(err)
+        with col_cancel:
+            if st.button("Cancel", use_container_width=True, key="pro_lead_cancel"):
+                st.session_state["show_pro_form"] = False
+                st.rerun()
 
-            with col_tips:
-                st.markdown("**Tips from your recent work**")
-                recent_tips = get_recent_tips(conn, st.session_state["user"], task_key, limit=3)
-                if not recent_tips:
-                    st.caption("Not enough data yet.")
-                else:
-                    for tip in recent_tips:
-                        st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
+# ---------------------------------------------------------------------------
+# Get Pro banner — shown at the bottom of every page except the Get Pro
+# page itself, so the upsell is always one click away.
+# ---------------------------------------------------------------------------
+if current_section != "get_pro":
+    st.markdown(
+        """
+        <div class="w90-pro-banner">
+            <div>
+                <p class="w90-pro-title">Upgrade to Write90 Pro — $12/month</p>
+                <p class="w90-pro-sub">Unlimited evaluations, full question banks, and priority support.</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("Get Pro", key="bottom_banner_get_pro"):
+        st.session_state["current_section"] = "get_pro"
+        st.rerun()
