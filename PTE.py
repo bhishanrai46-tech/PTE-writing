@@ -699,15 +699,28 @@ def delete_session(conn, token: str):
 
 SESSION_COOKIE_NAME = "write90_session"
 
+# Reset to None every script run (the whole file re-executes top-to-bottom
+# on each Streamlit rerun, so a plain module-level global naturally starts
+# fresh each time — this is NOT the same as @st.cache_resource, which
+# persists across runs and can't wrap a widget call anyway).
+_cookie_manager = None
+
 
 def get_cookie_manager():
-    """Returns the cookie-manager component. NOT wrapped in @st.cache_resource
-    — CookieManager's constructor itself renders a hidden widget to read all
-    cookies, and Streamlit disallows widget commands inside cached functions
-    (raises CachedWidgetWarning). The library is designed to be instantiated
-    fresh on every script run; passing a stable key is what keeps its
-    identity consistent across reruns, not caching the Python object."""
-    return stx.CookieManager(key="write90_cookie_manager")
+    """Returns the single cookie-manager instance for THIS script run,
+    creating it on first use and reusing it for every subsequent call in
+    the same run. This matters: CookieManager(key=...) itself renders a
+    widget, and calling it more than once per run with the same key raises
+    StreamlitDuplicateElementKey — which is exactly what happened when
+    get_session_cookie() (checked near the top of every run) and
+    set_session_cookie() (called on login/signup) each created their own
+    fresh instance with the same key in the same run. That crash also
+    meant the cookie was never actually written, which is why login
+    appeared to work but refreshing always logged back out."""
+    global _cookie_manager
+    if _cookie_manager is None:
+        _cookie_manager = stx.CookieManager(key="write90_cookie_manager")
+    return _cookie_manager
 
 
 def set_session_cookie(token: str):
@@ -821,18 +834,19 @@ def compute_streak(all_history) -> int:
 
 
 def fixed_score_chart(scores: list):
-    """A plain, static line chart — no scroll-zoom, no drag-pan, fixed 0-90 axis."""
+    """A plain, static line chart — no scroll-zoom, no drag-pan (touch or
+    mouse), fixed 0-90 axis. Altair charts have no pan/zoom by default;
+    .interactive() is what turns it ON, so it's simply never called here."""
     df = pd.DataFrame({"Attempt": list(range(1, len(scores) + 1)), "Score": scores})
     chart = (
         alt.Chart(df)
-        .mark_line(point=True, color="#2563EB")
+        .mark_line(point={"size": 70, "filled": True}, color="#2563EB", strokeWidth=2.5)
         .encode(
             x=alt.X("Attempt:O", title="Attempt"),
             y=alt.Y("Score:Q", title="Score", scale=alt.Scale(domain=[0, 90])),
             tooltip=["Attempt", "Score"],
         )
         .properties(height=220)
-        .interactive(False)
     )
     st.altair_chart(chart, use_container_width=True)
 
@@ -1496,7 +1510,7 @@ def render_dictation_section(cfg: dict, conn):
             st.info("No attempts yet. Your history for this task will appear here.")
         else:
             scores = [row[3] for row in history][::-1]
-            if len(scores) > 1:
+            if scores:
                 fixed_score_chart(scores)
             for created_at, hcontext, hresponse, hoverall, hresult_json in history:
                 with st.expander(f"{created_at[:16].replace('T',' ')} — Score: {hoverall}/90"):
@@ -1684,7 +1698,7 @@ with st.sidebar:
     nav_labels = {
         **{k: v["label"] for k, v in TASK_CONFIGS.items()},
         "study_tips": "Study Tips",
-        "progress": "My Progress (Free)",
+        "progress": "My Progress",
         "get_pro": "Get Pro",
     }
     if "current_section" not in st.session_state:
@@ -1832,7 +1846,7 @@ elif current_section in TASK_CONFIGS:
             st.info("No attempts yet. Your history for this task will appear here.")
         else:
             scores = [row[3] for row in history][::-1]
-            if len(scores) > 1:
+            if scores:
                 fixed_score_chart(scores)
             for created_at, hcontext, hresponse, hoverall, hresult_json in history:
                 with st.expander(f"{created_at[:16].replace('T',' ')} — Score: {hoverall}/90"):
@@ -1862,6 +1876,63 @@ elif current_section == "study_tips":
         for tip in tips:
             st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
 
+elif current_section == "progress":
+    all_hist = get_all_history(conn, st.session_state["user"])
+    if not all_hist:
+        st.info("Grade a few responses across the sections in the sidebar and your overall progress will show up here.")
+    else:
+        total = len(all_hist)
+        avg = round(sum(r[2] for r in all_hist) / total)
+        best = max(r[2] for r in all_hist)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total attempts", total)
+        c2.metric("Average score", f"{avg}/90")
+        c3.metric("Best score", f"{best}/90")
+        c4.metric("Day streak", streak)
+
+        for task_key, cfg in TASK_CONFIGS.items():
+            task_scores = [r[2] for r in all_hist if r[0] == task_key]
+            if not task_scores:
+                continue
+
+            st.markdown("---")
+            st.subheader(cfg["label"])
+            st.caption(f"{len(task_scores)} attempts · average {round(sum(task_scores)/len(task_scores))}/90 · latest {task_scores[-1]}/90")
+            fixed_score_chart(task_scores)
+
+            if cfg.get("criteria"):
+                col_weak, col_tips = st.columns(2)
+
+                with col_weak:
+                    st.markdown("**What to improve**")
+                    averages = get_criteria_averages(conn, st.session_state["user"], task_key)
+                    if not averages:
+                        st.caption("Not enough data yet.")
+                    else:
+                        crit_lookup = {key: (name, max_score) for key, name, max_score in cfg["criteria"]}
+                        ranked = sorted(
+                            averages.items(),
+                            key=lambda kv: kv[1] / crit_lookup[kv[0]][1] if kv[0] in crit_lookup else 1,
+                        )
+                        for key, avg_score in ranked[:2]:
+                            if key not in crit_lookup:
+                                continue
+                            name, max_score = crit_lookup[key]
+                            st.write(f"{name} — averaging {avg_score:.1f} / {max_score}")
+                            st.progress(min(1.0, avg_score / max_score if max_score else 0))
+                            st.caption(TIP_LIBRARY.get(key, "Focus extra practice on this area."))
+
+                with col_tips:
+                    st.markdown("**Tips from your recent work**")
+                    recent_tips = get_recent_tips(conn, st.session_state["user"], task_key, limit=3)
+                    if not recent_tips:
+                        st.caption("Not enough data yet.")
+                    else:
+                        for tip in recent_tips:
+                            st.markdown(f'<div class="pte-tip">{esc(tip)}</div>', unsafe_allow_html=True)
+            else:
+                st.caption("Scored locally by word accuracy — see the History tab under Write From Dictation for a detailed breakdown of each attempt.")
+
 elif current_section == "get_pro":
     st.subheader("Write90 Pro")
     st.markdown(
@@ -1869,7 +1940,7 @@ elif current_section == "get_pro":
         <div class="w90-pro-card">
             <div class="w90-pro-price">$12<span>/month</span></div>
             <div style="margin-top:18px;">
-                <div class="w90-pro-feature">✓ Unlimited daily AI-graded evaluations</div>
+                <div class="w90-pro-feature">✓ Unlimited PTE-based AI evaluations</div>
                 <div class="w90-pro-feature">✓ Full access to Essay, SWT, SST & Dictation banks</div>
                 <div class="w90-pro-feature">✓ Detailed score history & progress tracking</div>
                 <div class="w90-pro-feature">✓ Priority support</div>
