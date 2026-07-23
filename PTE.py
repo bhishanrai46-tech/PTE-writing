@@ -684,23 +684,19 @@ def delete_session(conn, token: str):
 SESSION_COOKIE_NAME = "write90_session"
 
 
-@st.cache_resource(show_spinner=False)
 def get_cookie_manager():
-    """A single shared cookie-manager component per server process. Cached
-    (rather than re-instantiated every script run) so its underlying
-    frontend component keeps a stable identity across reruns — recreating
-    it each run is what caused the old custom approach to race against
-    st.rerun() and silently lose the cookie write on refresh."""
+    """Returns the cookie-manager component. NOT wrapped in @st.cache_resource
+    — CookieManager's constructor itself renders a hidden widget to read all
+    cookies, and Streamlit disallows widget commands inside cached functions
+    (raises CachedWidgetWarning). The library is designed to be instantiated
+    fresh on every script run; passing a stable key is what keeps its
+    identity consistent across reruns, not caching the Python object."""
     return stx.CookieManager(key="write90_cookie_manager")
 
 
 def set_session_cookie(token: str):
     """Persists login across a page refresh using a browser cookie scoped to
-    this device only — never the URL. Uses a real Streamlit cookie
-    component instead of injecting a <script> via components.html, which
-    was prone to a timing race against the immediately-following
-    st.rerun() (the script could be torn down before it finished writing
-    the cookie)."""
+    this device only — never the URL."""
     expires_at = datetime.now(timezone.utc) + timedelta(days=30)
     get_cookie_manager().set(
         SESSION_COOKIE_NAME, token, expires_at=expires_at, key=f"set_{token[:8]}"
