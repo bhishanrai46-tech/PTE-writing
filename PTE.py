@@ -420,6 +420,52 @@ ESSAY_QUESTIONS = [
     "Many people argue that zoos are cruel and should be banned, while others believe they play an important role in conservation and education. Discuss both views and give your opinion.",
 ]
 
+# ---------------------------------------------------------------------------
+# Essay starter templates — three variants matching the three distinct prompt
+# shapes actually present in ESSAY_QUESTIONS above. A single one-size-fits-all
+# template doesn't work: following an "agree/disagree" structure on a
+# "discuss both views" prompt means never engaging one side of the argument,
+# which directly costs Content marks under Pearson's official rubric
+# ("addresses every part of the prompt in depth"). Wording throughout uses
+# the rubric's own terms (reformulate the issue, subsidiary points, relevant
+# examples, connective devices, well-developed introduction and conclusion)
+# so practicing with the template also reinforces the vocabulary of what's
+# being scored. See PTE Academic Score Guide, Write Essay criteria.
+# ---------------------------------------------------------------------------
+ESSAY_TEMPLATES = {
+    "both_views": (
+        "[Reformulate the issue in your own words and note that there are two sides]\n\n"
+        "[Body paragraph 1 — the first viewpoint, with a subsidiary point and a relevant example]\n\n"
+        "[Body paragraph 2 — the second viewpoint, with a subsidiary point and a relevant example]\n\n"
+        "[State your own opinion clearly and briefly justify it]"
+    ),
+    "agree_disagree": (
+        "[Reformulate the issue in your own words and clearly state your position]\n\n"
+        "[Body paragraph 1 — your first subsidiary point, with a relevant example]\n\n"
+        "[Body paragraph 2 — your second subsidiary point, with a relevant example]\n\n"
+        "[Restate your position and briefly summarize why]"
+    ),
+    "causes_solutions": (
+        "[Reformulate the issue in your own words and note you'll cover causes and solutions]\n\n"
+        "[Body paragraph 1 — the main cause(s), with a relevant example]\n\n"
+        "[Body paragraph 2 — the most effective solution(s), with a relevant example]\n\n"
+        "[Summarize the causes and solutions you've discussed]"
+    ),
+}
+
+
+def classify_essay_prompt(question_text: str) -> str:
+    """Detects which of the three prompt shapes an essay question follows,
+    so the right starter template is used. Falls back to agree_disagree
+    (the most common shape when uncertain, e.g. an empty custom question)."""
+    q = (question_text or "").lower()
+    if "both views" in q or "both sides" in q:
+        return "both_views"
+    if ("causes" in q and ("measures" in q or "address" in q)) or ("reasons" in q and "manage" in q):
+        return "causes_solutions"
+    return "agree_disagree"
+
+
 SWT_PASSAGES = [
     "Renewable energy sources such as solar and wind power have grown rapidly over the past decade, driven by falling technology costs and increasing government support. Unlike fossil fuels, these sources produce little to no greenhouse gas emissions during operation, making them central to global efforts to combat climate change. However, their reliance on weather conditions creates challenges for maintaining a stable electricity supply, prompting significant investment in battery storage and smart grid technologies. Many energy analysts now predict that renewables will overtake coal and gas as the dominant source of global electricity generation within the next two decades, provided that storage costs continue to decline at their current pace.",
     "Remote work, once a rare arrangement limited mainly to freelancers, became mainstream during the global disruptions of the early 2020s and has remained widespread ever since. Proponents argue that it increases employee flexibility, reduces commuting time, and can improve productivity for tasks requiring deep concentration. Critics, however, point to challenges in maintaining team cohesion, onboarding new employees, and separating work from personal life. As a result, many organizations have adopted hybrid models that combine in-office collaboration with remote flexibility, attempting to capture the benefits of both approaches while minimizing their respective drawbacks.",
@@ -536,6 +582,10 @@ Convert the raw total (max 26) to a scaled practice score out of 90, proportiona
         "response_placeholder": "Write ONE sentence, 5–75 words, capturing the passage's main idea...",
         "word_range": (5, 75),
         "word_hint": "Must be exactly ONE sentence, 5–75 words.",
+        "starter_template": (
+            "[Subject of the passage] [main point/argument], "
+            "and/while/because [key supporting detail, second point, or contrast]."
+        ),
         "time_limit_min": 10,
         "context_height": 220,
         "criteria": [
@@ -571,6 +621,12 @@ Convert the raw total (max 9) to a scaled practice score out of 90, proportional
         "response_placeholder": "Write a 50–70 word paragraph summarizing the key points of the lecture...",
         "word_range": (50, 70),
         "word_hint": "Aim for 50–70 words. Under 40 or over 100 scores zero.",
+        "starter_template": (
+            "[State the lecture's main topic]. [First key point discussed], and "
+            "[second key point discussed]. [Use a varied connective — however, "
+            "as a result, in addition — to relate them or note a contrast]. "
+            "[Concluding implication]."
+        ),
         "time_limit_min": 10,
         "context_height": 180,
         "criteria": [
@@ -1527,6 +1583,7 @@ def render_dictation_section(cfg: dict, conn):
 def custom_essay_dialog():
     cfg = TASK_CONFIGS["essay"]
     lo, hi = cfg["word_range"]
+    known_templates = {t.strip() for t in ESSAY_TEMPLATES.values()}
 
     custom_question = st.text_area(
         "Your essay question",
@@ -1534,12 +1591,26 @@ def custom_essay_dialog():
         placeholder="Paste or write any essay prompt here...",
         key="custom_essay_question",
     )
+
+    # Keep the starter template in sync with the detected prompt type as the
+    # person types their question — but only while the response box is still
+    # empty or holds one of the known unedited templates. The moment they
+    # actually start writing, this stops touching it (text_area's `value`
+    # argument is only honored on a key's very first render, so updating it
+    # directly through session_state is what makes live re-syncing possible
+    # here).
+    detected_template = ESSAY_TEMPLATES[classify_essay_prompt(custom_question)]
+    existing = st.session_state.get("custom_essay_response", "")
+    if existing.strip() == "" or existing.strip() in known_templates:
+        st.session_state["custom_essay_response"] = detected_template
+
     custom_response = st.text_area(
         "Your essay (custom prompt)",
         height=420,
         placeholder="Write or paste your 200–300 word essay here...",
         key="custom_essay_response",
     )
+    st.caption("Starts with a structure matched to your question's type — replace each bracket with your own writing.")
     render_live_word_counter(
         counter_key="custom_essay",
         textarea_label="Your essay (custom prompt)",
@@ -1551,7 +1622,8 @@ def custom_essay_dialog():
     submit = st.button(
         "Mark My Response Against Rubric",
         type="primary",
-        disabled=not (custom_question.strip() and custom_response.strip()),
+        disabled=not (custom_question.strip() and custom_response.strip())
+        or custom_response.strip() in known_templates,
     )
     if submit:
         if not api_key:
@@ -1787,9 +1859,17 @@ elif current_section in TASK_CONFIGS:
                     unsafe_allow_html=True,
                 )
 
+            if task_key == "essay":
+                current_template = ESSAY_TEMPLATES[classify_essay_prompt(context_text)]
+            else:
+                current_template = cfg.get("starter_template", "")
+
             response_text = st.text_area(cfg["response_label"], height=420,
+                                          value=current_template,
                                           placeholder=cfg["response_placeholder"],
                                           key=f"resp_{task_key}_{current_idx}")
+            if current_template:
+                st.caption("Starts with a suggested structure — replace each bracket with your own writing.")
             wc = word_count(response_text)
             char_count = len(response_text)
             lo, hi = cfg["word_range"]
@@ -1800,8 +1880,9 @@ elif current_section in TASK_CONFIGS:
                 initial_text=response_text,
             )
             st.caption(cfg["word_hint"])
+            is_untouched_template = response_text.strip() == current_template.strip()
             submit = st.button("Mark My Response Against Rubric", type="primary", key=f"submit_{task_key}_{current_idx}",
-                                disabled=not response_text.strip())
+                                disabled=not response_text.strip() or is_untouched_template)
 
         with right:
             total_max = sum(m for _, _, m in cfg["criteria"])
@@ -1817,8 +1898,8 @@ elif current_section in TASK_CONFIGS:
             st.markdown(guide_html, unsafe_allow_html=True)
 
         st.markdown("---")
-        if not response_text.strip():
-            st.info("Write your response above, then click **Mark My Response Against Rubric**.")
+        if not response_text.strip() or is_untouched_template:
+            st.info("Replace the bracketed template above with your own writing, then click **Mark My Response Against Rubric**.")
         elif submit:
             if not api_key:
                 st.error("Enter your Anthropic API key in the sidebar first.")
