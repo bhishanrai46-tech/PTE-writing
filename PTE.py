@@ -1193,7 +1193,55 @@ def render_live_word_counter(counter_key: str, textarea_label: str, lo: int, hi:
     )
 
 
-def tts_button(text: str, key: str, button_label: str = "Play lecture aloud"):
+def render_template_opacity_script(textarea_label: str, template_text: str):
+    """Dims a textarea's text to semi-transparent while its content still
+    exactly matches the unedited starter template, snapping back to full
+    opacity the moment anything is changed. This isn't the same as a native
+    placeholder (which vanishes on the first keystroke) — the template text
+    stays fully present and editable, it just visually reads as a ghost
+    structure until it's actually written over. Since .stTextArea textarea's
+    color rule uses !important, the dim/full-opacity toggle also needs
+    !important (via setProperty) or the stylesheet rule would silently win."""
+    if not template_text:
+        return
+    safe_label = json.dumps(textarea_label)
+    safe_template = json.dumps(template_text)
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const label = {safe_label};
+            const templateText = {safe_template};
+
+            function attach() {{
+                const doc = window.parent.document;
+                const textarea = doc.querySelector('textarea[aria-label="' + label + '"]');
+                if (!textarea) {{ setTimeout(attach, 150); return; }}
+
+                function updateOpacity() {{
+                    if (textarea.value === templateText) {{
+                        textarea.style.setProperty('color', 'rgba(15, 23, 42, 0.4)', 'important');
+                    }} else {{
+                        textarea.style.removeProperty('color');
+                    }}
+                }}
+
+                if (textarea.__write90OpacityHandler) {{
+                    textarea.removeEventListener('input', textarea.__write90OpacityHandler);
+                }}
+                textarea.__write90OpacityHandler = updateOpacity;
+                textarea.addEventListener('input', updateOpacity);
+                updateOpacity();
+            }}
+            attach();
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+
     safe_text = json.dumps(text)
     safe_label = json.dumps(button_label)
     components.html(
@@ -1611,6 +1659,7 @@ def custom_essay_dialog():
         key="custom_essay_response",
     )
     st.caption("Starts with a structure matched to your question's type — replace each bracket with your own writing.")
+    render_template_opacity_script("Your essay (custom prompt)", detected_template)
     render_live_word_counter(
         counter_key="custom_essay",
         textarea_label="Your essay (custom prompt)",
@@ -1870,6 +1919,7 @@ elif current_section in TASK_CONFIGS:
                                           key=f"resp_{task_key}_{current_idx}")
             if current_template:
                 st.caption("Starts with a suggested structure — replace each bracket with your own writing.")
+                render_template_opacity_script(cfg["response_label"], current_template)
             wc = word_count(response_text)
             char_count = len(response_text)
             lo, hi = cfg["word_range"]
