@@ -699,28 +699,20 @@ def delete_session(conn, token: str):
 
 SESSION_COOKIE_NAME = "write90_session"
 
-# Reset to None every script run (the whole file re-executes top-to-bottom
-# on each Streamlit rerun, so a plain module-level global naturally starts
-# fresh each time — this is NOT the same as @st.cache_resource, which
-# persists across runs and can't wrap a widget call anyway).
-_cookie_manager = None
-
 
 def get_cookie_manager():
-    """Returns the single cookie-manager instance for THIS script run,
-    creating it on first use and reusing it for every subsequent call in
-    the same run. This matters: CookieManager(key=...) itself renders a
-    widget, and calling it more than once per run with the same key raises
-    StreamlitDuplicateElementKey — which is exactly what happened when
-    get_session_cookie() (checked near the top of every run) and
-    set_session_cookie() (called on login/signup) each created their own
-    fresh instance with the same key in the same run. That crash also
-    meant the cookie was never actually written, which is why login
-    appeared to work but refreshing always logged back out."""
-    global _cookie_manager
-    if _cookie_manager is None:
-        _cookie_manager = stx.CookieManager(key="write90_cookie_manager")
-    return _cookie_manager
+    """Returns the single cookie-manager instance for THIS browser session,
+    cached in st.session_state (which is strictly per-session in Streamlit)
+    rather than in a module-level global. A module-level global is shared
+    across every concurrent user's script thread in the same server process,
+    so two sessions running at once could read/write each other's cookie
+    manager — silently returning None or a stale token and forcing a
+    re-login on refresh even though the cookie was set correctly. Caching
+    per st.session_state guarantees each browser session gets its own
+    instance and never races with anyone else's."""
+    if "_cookie_manager" not in st.session_state:
+        st.session_state["_cookie_manager"] = stx.CookieManager(key="write90_cookie_manager")
+    return st.session_state["_cookie_manager"]
 
 
 def set_session_cookie(token: str):
