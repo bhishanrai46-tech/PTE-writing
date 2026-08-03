@@ -228,6 +228,40 @@ st.markdown(
     .pte-score-box .of90 { font-size: 12px; color: var(--text-secondary) !important; letter-spacing: 0.06em; text-transform: uppercase; margin-top: 2px; }
     .pte-summary { font-size: 14.5px; color: var(--text-secondary) !important; text-align: center; max-width: 560px; margin: 8px auto 0; }
 
+    /* ---- Chat / Ask the Tutor — styled to match the rest of the app
+       instead of Streamlit's default chat bubble widget, which ignores
+       our theme entirely (fixed avatars, dark-mode-leaning colors). ---- */
+    .w90-chat-row { display: flex; margin-bottom: 14px; }
+    .w90-chat-row.user { justify-content: flex-end; }
+    .w90-chat-row.assistant { justify-content: flex-start; }
+    .w90-chat-bubble {
+        max-width: 78%; padding: 12px 16px; border-radius: 12px;
+        font-size: 14px; line-height: 1.6; white-space: pre-wrap;
+    }
+    .w90-chat-bubble.user {
+        background-color: var(--accent) !important; color: #FFFFFF !important;
+        border-bottom-right-radius: 3px;
+    }
+    .w90-chat-bubble.assistant {
+        background: var(--guide-bg) !important; color: var(--text) !important;
+        border: 1px solid #BFDBFE; border-bottom-left-radius: 3px;
+    }
+    .w90-chat-label {
+        font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+        color: var(--text-secondary) !important; margin-bottom: 3px; display: block;
+    }
+    .w90-chat-row.user .w90-chat-label { text-align: right; color: #93C5FD !important; }
+    .w90-chat-empty {
+        background: var(--guide-bg); border: 1px dashed #BFDBFE; border-radius: 10px;
+        padding: 16px 18px; font-size: 13.5px; color: #1E3A8A !important; line-height: 1.6;
+    }
+    [data-testid="stChatInput"] { background-color: transparent !important; border-top: 1px solid var(--border); padding-top: 10px; }
+    [data-testid="stChatInput"] textarea { background-color: #FFFFFF !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; }
+    [data-testid="stChatInput"] textarea::placeholder { color: #94A3B8 !important; }
+    [data-testid="stChatInput"] button { background-color: var(--accent) !important; }
+    [data-testid="stChatInput"] button svg { fill: #FFFFFF !important; }
+    [data-testid="stBottomBlockContainer"] { background-color: var(--bg) !important; }
+
     .w90-pro-banner {
         background-color: #FFF7ED;
         border: 1px solid #FDBA74;
@@ -1676,6 +1710,21 @@ def call_chat(api_key: str, messages: list) -> str:
     return "".join(block.text for block in response.content if block.type == "text")
 
 
+def render_chat_bubble(role: str, content: str):
+    """Renders one chat message as a themed bubble matching the rest of the
+    app (w90-* classes), instead of st.chat_message's default widget, which
+    ships with its own fixed avatars/colors that ignore this app's theme
+    entirely and look visually disconnected from every other screen."""
+    label = "You" if role == "user" else "Tutor"
+    st.markdown(
+        f'<div class="w90-chat-row {role}">'
+        f'<div class="w90-chat-bubble {role}">'
+        f'<span class="w90-chat-label">{label}</span>{esc(content)}'
+        f'</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_chatbot_section(conn):
     st.subheader("Ask the Tutor")
     st.caption("Ask anything personal to your prep — grammar checks, vocabulary, strategy, \"does this sentence sound natural\", or just where to focus next. This chat isn't scored and doesn't count toward your task history.")
@@ -1683,17 +1732,16 @@ def render_chatbot_section(conn):
     if "chat_messages" not in st.session_state:
         st.session_state["chat_messages"] = []
 
-    for msg in st.session_state["chat_messages"]:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
     if not st.session_state["chat_messages"]:
         st.markdown(
-            '<div class="pte-tip">Try asking things like: "Is this sentence grammatically correct: ...", '
+            '<div class="w90-chat-empty">Try asking things like: "Is this sentence grammatically correct: ...", '
             '"What\'s the difference between \'affect\' and \'effect\'?", "How is the Essay task scored?", '
             'or "I keep running out of time on SST, what should I change?"</div>',
             unsafe_allow_html=True,
         )
+    else:
+        for msg in st.session_state["chat_messages"]:
+            render_chat_bubble(msg["role"], msg["content"])
 
     prompt = st.chat_input("Ask a question…")
     if prompt:
@@ -1705,22 +1753,20 @@ def render_chatbot_section(conn):
             return
 
         st.session_state["chat_messages"].append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking…"):
-                try:
-                    api_messages = [
-                        {"role": m["role"], "content": m["content"]}
-                        for m in st.session_state["chat_messages"]
-                    ]
-                    reply = call_chat(api_key, api_messages)
-                    bump_usage_count(conn, st.session_state["user"])
-                except Exception as e:
-                    reply = f"Something went wrong reaching the tutor: {e}"
-                st.markdown(reply)
+        with st.spinner("Thinking…"):
+            try:
+                api_messages = [
+                    {"role": m["role"], "content": m["content"]}
+                    for m in st.session_state["chat_messages"]
+                ]
+                reply = call_chat(api_key, api_messages)
+                bump_usage_count(conn, st.session_state["user"])
+            except Exception as e:
+                reply = f"Something went wrong reaching the tutor: {e}"
+
         st.session_state["chat_messages"].append({"role": "assistant", "content": reply})
+        st.rerun()
 
     if st.session_state["chat_messages"]:
         if st.button("Clear conversation", key="clear_chat"):
